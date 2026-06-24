@@ -1,0 +1,208 @@
+================================================================================
+GAZEBO SETTINGS & WORLD POLES CONFIGURATION
+ROS2 Launch: expert_planning.launch.py + sitl.launch.py
+================================================================================
+
+COMMAND YANG DIJALANKAN:
+================================================================================
+ros2 launch neo_planner expert_planning.launch.py \
+  pcd_path:=/home/michael/poles.pcd \
+  target_samples:=500
+
+CATATAN PENTING:
+- Command ini TIDAK meluncurkan Gazebo sendiri
+- Ini adalah node-node planning yang bekerja dengan simulasi Gazebo yang sudah berjalan
+- Gazebo harus sudah berjalan terlebih dahulu dengan command berikut
+
+
+================================================================================
+SETUP GAZEBO (dari sitl.launch.py)
+================================================================================
+
+Untuk menjalankan Gazebo dengan world "poles", gunakan:
+
+ros2 launch neo_planner sitl.launch.py vehicle:=x500_depth world:=poles
+
+KONFIGURASI GAZEBO:
+-------------------
+GZ_CONFIG_PATH          : /usr/share/gz
+PX4_SIM_MODEL           : gz_x500_depth
+PX4_GZ_WORLD            : poles
+GUI Status              : Muncul 12 detik setelah server siap
+Headless Mode           : false (ada GUI)
+
+WORLD YANG TERSEDIA:
+-------------------
+- default
+- forest
+- forest1
+- bricks
+- bricks2
+- lawn
+- obstacles
+- poles (yang Anda gunakan)
+- poles_uniform
+- baylands
+- windy
+- rand_world_10/12/14/15/16/18/20/24
+
+
+================================================================================
+SETTINGAN EXPERT PLANNING UNTUK WORLD "POLES"
+================================================================================
+
+Occupancy Band untuk World Poles:
+- occ_min_z = 1.0 m  (Min Z proyeksi 2D)
+- occ_max_z = 3.0 m  (Max Z proyeksi 2D)
+- Obstacle pendek = 3.36m
+- Drone altitude = 1.5m
+
+Catatan: Untuk world "bricks", gunakan occ_min_z=0.5
+
+
+================================================================================
+PARAMETER DEFAULT (expert_planning.launch.py)
+================================================================================
+
+target_samples          : 500 (Anda gunakan, default=5000)
+goal_x                  : 15.0 m (Koordinat X goal)
+target_alt              : 1.5 m (Altitude drone target)
+replan_period           : 1.0 s (Periode replanning)
+cmd_hz                  : 100 Hz (Frekuensi publish ke MAVROS)
+v_max                   : 1.0 m/s (Kecepatan maksimal drone)
+safe_dis                : 0.8 m (Safe distance dari obstacle)
+occ_min_z               : 1.0 m (Min Z proyeksi 2D - POLES SPECIFIC)
+occ_max_z               : 3.0 m (Max Z proyeksi 2D)
+use_ekf_stable          : true (Tunggu EKF Z konvergen sebelum takeoff)
+data_save_dir           : auto (Generate folder dengan timestamp)
+
+
+================================================================================
+NODES YANG DIJALANKAN
+================================================================================
+
+1. publish_pcd_node
+   Package         : neo_planner
+   Executable      : publish_pcd_node
+   Name            : publish_pcd_node
+   Parameters:
+   - pcd_path      : /home/michael/poles.pcd
+   - frame_id      : map
+   - rate_hz       : 2.0 Hz
+
+2. octomap_server_node
+   Package         : octomap_server
+   Executable      : octomap_server_node
+   Name            : octomap_server_expert
+   Parameters:
+   - frame_id      : map
+   - resolution    : 0.2 m
+   - publish_2d_map: True
+   - publish_3d_map: False
+   - occupancy_min_z: 1.0 m (untuk poles)
+   - occupancy_max_z: 3.0 m
+   - ground_filter : False
+   - use_height_map: False
+   Remapping:
+   - cloud_in -> /pointcloud/map
+
+3. mavros_tf_broadcaster_node
+   Package         : neo_planner
+   Executable      : mavros_tf_broadcaster_node
+   Name            : mavros_tf_broadcaster_expert
+
+4. expert_planner_node
+   Package         : neo_planner
+   Executable      : expert_planner_node
+   Name            : expert_planner_node
+   Parameters:
+   - data_save_dir : ~/training_data/run_TIMESTAMP/
+   - target_samples: 500
+   - goal_x        : 15.0
+   - target_alt    : 1.5
+   - replan_period : 1.0
+   - cmd_hz        : 100
+   - v_max         : 1.0
+   - safe_dis      : 0.8
+   - use_ekf_stable: true
+
+
+================================================================================
+FILE PCD (POINT CLOUD DATA)
+================================================================================
+
+File Path       : /home/michael/poles.pcd
+File Size       : ~3.1 MB (3,129,577 bytes)
+Frame ID        : map
+Publish Rate    : 2.0 Hz
+Type            : Point Cloud Data (.pcd format)
+
+Deskripsi:
+- File ini berisi data point cloud untuk world "poles"
+- Digunakan oleh publish_pcd_node untuk dipublikasikan ke topik /pointcloud/map
+- Diproses oleh octomap_server untuk membuat 3D octree
+- Dikonsumsi oleh expert_planner_node untuk path planning
+
+
+================================================================================
+FAST-DDS/FASTRTPS CLEANUP
+================================================================================
+
+Saat start, sitl.launch.py otomatis:
+1. Berhentikan semua proses Gazebo/PX4/ROS lama (SIGTERM)
+2. Paksa-kill proses yang masih hidup (SIGKILL)
+3. Bersihkan socket dan port yang terkunci
+4. Hapus shared memory FastDDS yang stale
+5. Restart ROS2 daemon
+6. Hapus PX4 unix socket
+7. Hapus file state PX4 (parameters.bson, dataman)
+
+Ini dilakukan untuk menghindari MAVROS crash pada saat restart.
+
+
+================================================================================
+TROUBLESHOOTING
+================================================================================
+
+Jika expert_planner crash atau tidak merespons:
+1. Pastikan Gazebo sudah running:
+   ros2 launch neo_planner sitl.launch.py vehicle:=x500_depth world:=poles
+
+2. Tunggu sampai "Gazebo GUI" muncul (12 detik)
+
+3. Verify node yang running:
+   ros2 node list
+   ros2 topic list
+
+4. Check occ_min_z/occ_max_z sesuai world (untuk poles: 1.0/3.0)
+
+5. Jika masih error, restart dengan sitl.launch.py yang akan bersihkan semua
+
+Data save location:
+- Default: ~/training_data/run_YYYYMMDD_HHMMSS/
+- Jika ingin custom: data_save_dir:=/path/to/folder
+
+
+================================================================================
+FULL LAUNCH COMMAND SEQUENCE
+================================================================================
+
+Terminal 1 (Gazebo & PX4):
+ros2 launch neo_planner sitl.launch.py vehicle:=x500_depth world:=poles
+
+Terminal 2 (Expert Planning - tunggu 15 detik, pastikan Gazebo GUI muncul):
+ros2 launch neo_planner expert_planning.launch.py \
+  pcd_path:=/home/michael/poles.pcd \
+  target_samples:=500
+
+Terminal 3+ (Monitoring - opsional):
+# Monitor nodes
+ros2 node list
+
+# Monitor topics
+ros2 topic list
+
+# Monitor expert planner output
+ros2 topic echo /expert_planner/path
+
+================================================================================

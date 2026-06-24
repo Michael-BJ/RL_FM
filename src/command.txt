@@ -1,0 +1,12 @@
+# for collecting dataset in expert nn_planner
+ros2 launch neo_planner sitl.launch.py world:=poles
+ros2 launch neo_planner mavros_only.launch.py
+ros2 launch neo_planner camera_vfh.launch.py
+ros2 launch neo_planner expert_planning.launch.py   pcd_path:=/home/michael/poles.pcd   target_samples:=1000
+
+
+# for inference
+ros2 launch neo_planner sitl.launch.py world:=forest1
+ros2 launch neo_planner mavros_only.launch.py
+ros2 launch neo_planner camera_vfh.launch.py
+ros2 launch neo_planner nn_planning_unknown.launch.py   model_path:=/home/michael/training_nn_planner/saved_net_01/planner_net.pth   goal_x:=20.0

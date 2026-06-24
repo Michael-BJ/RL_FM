@@ -1,0 +1,14 @@
+/**:
+  ros__parameters:
+    plugin_denylist:
+      # companion_process_status and debug_value both cause "incompatible type"
+      # crashes on ROS2 Jazzy when DDS has a stale participant from a prior session
+      - companion_process_status
+      - debug_value
+
+      # unused plugins
+      - image_pub
+      - vibration
+      - distance_sensor
+      - rangefinder
+      - wheel_odometry

@@ -1,0 +1,274 @@
+<?xml version="1.0" ?>
+<sdf version="1.9">
+  <world name="bricks">
+    <physics name="1ms" type="ignored">
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+    </physics>
+    <spherical_coordinates>
+      <surface_model>EARTH_WGS84</surface_model>
+      <world_frame_orientation>ENU</world_frame_orientation>
+      <latitude_deg>47.397742</latitude_deg>
+      <longitude_deg>8.545594</longitude_deg>
+      <elevation>488.0</elevation>
+    </spherical_coordinates>
+    <plugin filename="gz-sim-physics-system"            name="gz::sim::systems::Physics"/>
+    <plugin filename="gz-sim-sensors-system"            name="gz::sim::systems::Sensors">
+      <render_engine>ogre2</render_engine>
+    </plugin>
+    <plugin filename="gz-sim-scene-broadcaster-system"  name="gz::sim::systems::SceneBroadcaster"/>
+    <plugin filename="gz-sim-user-commands-system"      name="gz::sim::systems::UserCommands"/>
+    <plugin filename="gz-sim-imu-system"                name="gz::sim::systems::Imu"/>
+    <plugin filename="gz-sim-air-pressure-system"       name="gz::sim::systems::AirPressure"/>
+    <plugin filename="gz-sim-altimeter-system"          name="gz::sim::systems::Altimeter"/>
+    <plugin filename="gz-sim-magnetometer-system"       name="gz::sim::systems::Magnetometer"/>
+    <plugin filename="gz-sim-contact-system"            name="gz::sim::systems::Contact"/>
+    <light type="directional" name="sun">
+      <cast_shadows>true</cast_shadows>
+      <pose>0 0 10 0 0 0</pose>
+      <diffuse>0.9 0.9 0.9 1</diffuse>
+      <specular>0.2 0.2 0.2 1</specular>
+      <attenuation><range>1000</range><constant>0.9</constant><linear>0.01</linear><quadratic>0.001</quadratic></attenuation>
+      <direction>-0.5 0.1 -0.9</direction>
+    </light>
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision"><geometry><plane><normal>0 0 1</normal><size>100 100</size></plane></geometry></collision>
+        <visual name="visual"><cast_shadows>false</cast_shadows><geometry><plane><normal>0 0 1</normal><size>100 100</size></plane></geometry>
+          <material><ambient>0.6 0.6 0.6 1</ambient><diffuse>0.7 0.7 0.7 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <model name="brick_0">
+      <pose>3.5082 -1.1304 1.5000 0 0 0</pose>
+      <static>true</static>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>3.0 1.0 3.0</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>3.0 1.0 3.0</size></box></geometry>
+          <material><ambient>0.7 0.4 0.2 1</ambient><diffuse>0.7 0.4 0.2 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <model name="brick_1">
+      <pose>7.9316 2.4732 1.5000 0 0 0</pose>
+      <static>true</static>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>3.0 1.0 3.0</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>3.0 1.0 3.0</size></box></geometry>
+          <material><ambient>0.7 0.4 0.2 1</ambient><diffuse>0.7 0.4 0.2 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <model name="brick_2">
+      <pose>8.9242 -3.6465 1.5000 0 0 0</pose>
+      <static>true</static>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>3.0 1.0 3.0</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>3.0 1.0 3.0</size></box></geometry>
+          <material><ambient>0.7 0.4 0.2 1</ambient><diffuse>0.7 0.4 0.2 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <model name="brick_3">
+      <pose>12.9265 -0.1305 1.5000 0 0 0</pose>
+      <static>true</static>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>3.0 1.0 3.0</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>3.0 1.0 3.0</size></box></geometry>
+          <material><ambient>0.7 0.4 0.2 1</ambient><diffuse>0.7 0.4 0.2 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <model name="brick_4">
+      <pose>17.1930 3.1539 1.5000 0 0 0</pose>
+      <static>true</static>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>3.0 1.0 3.0</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>3.0 1.0 3.0</size></box></geometry>
+          <material><ambient>0.7 0.4 0.2 1</ambient><diffuse>0.7 0.4 0.2 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <model name="brick_5">
+      <pose>16.9406 -4.5803 1.5000 0 0 0</pose>
+      <static>true</static>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>3.0 1.0 3.0</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>3.0 1.0 3.0</size></box></geometry>
+          <material><ambient>0.7 0.4 0.2 1</ambient><diffuse>0.7 0.4 0.2 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <model name="brick_6">
+      <pose>7.9102 5.4594 1.5000 0 0 0</pose>
+      <static>true</static>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>3.0 1.0 3.0</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>3.0 1.0 3.0</size></box></geometry>
+          <material><ambient>0.7 0.4 0.2 1</ambient><diffuse>0.7 0.4 0.2 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <model name="brick_7">
+      <pose>8.9108 -6.6218 1.5000 0 0 0</pose>
+      <static>true</static>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>3.0 1.0 3.0</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>3.0 1.0 3.0</size></box></geometry>
+          <material><ambient>0.7 0.4 0.2 1</ambient><diffuse>0.7 0.4 0.2 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <model name="brick_8">
+      <pose>20.9095 -0.7267 1.5000 0 0 0</pose>
+      <static>true</static>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>3.0 1.0 3.0</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>3.0 1.0 3.0</size></box></geometry>
+          <material><ambient>0.7 0.4 0.2 1</ambient><diffuse>0.7 0.4 0.2 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <model name="brick_9">
+      <pose>16.9283 -7.5911 1.5000 0 0 0</pose>
+      <static>true</static>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>3.0 1.0 3.0</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>3.0 1.0 3.0</size></box></geometry>
+          <material><ambient>0.7 0.4 0.2 1</ambient><diffuse>0.7 0.4 0.2 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <model name="brick_10">
+      <pose>22.1144 -5.2732 1.5000 0 0 0</pose>
+      <static>true</static>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>3.0 1.0 3.0</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>3.0 1.0 3.0</size></box></geometry>
+          <material><ambient>0.7 0.4 0.2 1</ambient><diffuse>0.7 0.4 0.2 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <model name="brick_11">
+      <pose>12.3537 5.4071 1.5000 0 0 0</pose>
+      <static>true</static>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>3.0 1.0 3.0</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>3.0 1.0 3.0</size></box></geometry>
+          <material><ambient>0.7 0.4 0.2 1</ambient><diffuse>0.7 0.4 0.2 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <model name="brick_12">
+      <pose>5.9286 4.5426 1.5000 0 0 0</pose>
+      <static>true</static>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>3.0 1.0 3.0</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>3.0 1.0 3.0</size></box></geometry>
+          <material><ambient>0.7 0.4 0.2 1</ambient><diffuse>0.7 0.4 0.2 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <model name="brick_13">
+      <pose>2.9308 4.5358 1.5000 0 0 0</pose>
+      <static>true</static>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>3.0 1.0 3.0</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>3.0 1.0 3.0</size></box></geometry>
+          <material><ambient>0.7 0.4 0.2 1</ambient><diffuse>0.7 0.4 0.2 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <model name="brick_14">
+      <pose>23.4503 3.4362 1.5000 0 0 0</pose>
+      <static>true</static>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>3.0 1.0 3.0</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>3.0 1.0 3.0</size></box></geometry>
+          <material><ambient>0.7 0.4 0.2 1</ambient><diffuse>0.7 0.4 0.2 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <model name="brick_15">
+      <pose>27.6740 -0.6164 1.5000 0 0 0</pose>
+      <static>true</static>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>3.0 1.0 3.0</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>3.0 1.0 3.0</size></box></geometry>
+          <material><ambient>0.7 0.4 0.2 1</ambient><diffuse>0.7 0.4 0.2 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <model name="brick_16">
+      <pose>25.1334 -5.2614 1.5000 0 0 0</pose>
+      <static>true</static>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>3.0 1.0 3.0</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>3.0 1.0 3.0</size></box></geometry>
+          <material><ambient>0.7 0.4 0.2 1</ambient><diffuse>0.7 0.4 0.2 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <model name="brick_17">
+      <pose>21.7192 7.4382 1.5000 0 0 0</pose>
+      <static>true</static>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>3.0 1.0 3.0</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>3.0 1.0 3.0</size></box></geometry>
+          <material><ambient>0.7 0.4 0.2 1</ambient><diffuse>0.7 0.4 0.2 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <model name="brick_18">
+      <pose>24.6985 7.4253 1.5000 0 0 0</pose>
+      <static>true</static>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>3.0 1.0 3.0</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>3.0 1.0 3.0</size></box></geometry>
+          <material><ambient>0.7 0.4 0.2 1</ambient><diffuse>0.7 0.4 0.2 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <model name="brick_19">
+      <pose>18.7130 7.4276 1.5000 0 0 0</pose>
+      <static>true</static>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>3.0 1.0 3.0</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>3.0 1.0 3.0</size></box></geometry>
+          <material><ambient>0.7 0.4 0.2 1</ambient><diffuse>0.7 0.4 0.2 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <model name="brick_20">
+      <pose>10.9130 -7.6062 1.5000 0 0 0</pose>
+      <static>true</static>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>3.0 1.0 3.0</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>3.0 1.0 3.0</size></box></geometry>
+          <material><ambient>0.7 0.4 0.2 1</ambient><diffuse>0.7 0.4 0.2 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <model name="brick_21">
+      <pose>3.5795 -5.7654 1.5000 0 0 0</pose>
+      <static>true</static>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>3.0 1.0 3.0</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>3.0 1.0 3.0</size></box></geometry>
+          <material><ambient>0.7 0.4 0.2 1</ambient><diffuse>0.7 0.4 0.2 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <model name="brick_22">
+      <pose>18.9386 -8.5936 1.5000 0 0 0</pose>
+      <static>true</static>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>3.0 1.0 3.0</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>3.0 1.0 3.0</size></box></geometry>
+          <material><ambient>0.7 0.4 0.2 1</ambient><diffuse>0.7 0.4 0.2 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+  </world>
+</sdf>
