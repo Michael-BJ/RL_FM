@@ -1,0 +1,279 @@
+<?xml version="1.0" ?>
+<!--
+  poles_wide.sdf — dibuat oleh generate_wide_worlds.py
+  Eksperimen ambiguitas multimodal: obstacle lebar di sumbu terbang y=0.
+  Koordinat IDENTIK dengan poles_wide.pcd (peta ground-truth expert).
+
+  Pakai:
+    cp poles_wide.sdf ~/PX4-Autopilot/Tools/simulation/gz/worlds/
+    ros2 launch neo_planner sitl.launch.py world:=poles_wide
+-->
+<sdf version="1.9">
+  <world name="poles_wide">
+
+    <physics name="1ms" type="ignored">
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+    </physics>
+
+    <!-- WAJIB untuk magnetometer PX4 SITL -->
+    <spherical_coordinates>
+      <surface_model>EARTH_WGS84</surface_model>
+      <world_frame_orientation>ENU</world_frame_orientation>
+      <latitude_deg>47.397742</latitude_deg>
+      <longitude_deg>8.545594</longitude_deg>
+      <elevation>488.0</elevation>
+    </spherical_coordinates>
+
+    <plugin filename="gz-sim-physics-system"            name="gz::sim::systems::Physics"/>
+    <plugin filename="gz-sim-sensors-system"            name="gz::sim::systems::Sensors">
+      <render_engine>ogre2</render_engine>
+    </plugin>
+    <plugin filename="gz-sim-scene-broadcaster-system"  name="gz::sim::systems::SceneBroadcaster"/>
+    <plugin filename="gz-sim-user-commands-system"      name="gz::sim::systems::UserCommands"/>
+    <plugin filename="gz-sim-imu-system"                name="gz::sim::systems::Imu"/>
+    <plugin filename="gz-sim-air-pressure-system"       name="gz::sim::systems::AirPressure"/>
+    <plugin filename="gz-sim-altimeter-system"          name="gz::sim::systems::Altimeter"/>
+    <plugin filename="gz-sim-magnetometer-system"       name="gz::sim::systems::Magnetometer"/>
+    <!-- WAJIB: tanpa NavSat -> "Compass Sensor 0 missing" -->
+    <plugin filename="gz-sim-navsat-system"             name="gz::sim::systems::NavSat"/>
+    <plugin filename="gz-sim-contact-system"            name="gz::sim::systems::Contact"/>
+
+    <light type="directional" name="sun">
+      <cast_shadows>true</cast_shadows>
+      <pose>0 0 10 0 0 0</pose>
+      <diffuse>0.9 0.9 0.9 1</diffuse>
+      <specular>0.2 0.2 0.2 1</specular>
+      <attenuation>
+        <range>1000</range>
+        <constant>0.9</constant>
+        <linear>0.01</linear>
+        <quadratic>0.001</quadratic>
+      </attenuation>
+      <direction>-0.5 0.1 -0.9</direction>
+    </light>
+
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry><plane><normal>0 0 1</normal><size>100 100</size></plane></geometry>
+        </collision>
+        <visual name="visual">
+          <cast_shadows>false</cast_shadows>
+          <geometry><plane><normal>0 0 1</normal><size>100 100</size></plane></geometry>
+          <material>
+            <ambient>0.6 0.6 0.6 1</ambient>
+            <diffuse>0.7 0.7 0.7 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="box_1">
+      <pose>4.50 0.00 1.800 0 0 0</pose>
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.60 1.20 3.60</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.60 1.20 3.60</size></box></geometry>
+          <material>
+            <ambient>0.7 0.2 0.2 1</ambient>
+            <diffuse>0.8 0.3 0.3 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="box_2">
+      <pose>9.00 0.00 1.800 0 0 0</pose>
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.60 1.60 3.60</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.60 1.60 3.60</size></box></geometry>
+          <material>
+            <ambient>0.7 0.2 0.2 1</ambient>
+            <diffuse>0.8 0.3 0.3 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="box_3">
+      <pose>13.50 0.00 1.800 0 0 0</pose>
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.80 2.00 3.60</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.80 2.00 3.60</size></box></geometry>
+          <material>
+            <ambient>0.7 0.2 0.2 1</ambient>
+            <diffuse>0.8 0.3 0.3 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="box_4">
+      <pose>17.00 0.00 1.800 0 0 0</pose>
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.80 2.40 3.60</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.80 2.40 3.60</size></box></geometry>
+          <material>
+            <ambient>0.7 0.2 0.2 1</ambient>
+            <diffuse>0.8 0.3 0.3 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="pole_1">
+      <pose>6.80 2.80 1.950 0 0 0</pose>
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry><cylinder><radius>0.40</radius><length>3.90</length></cylinder></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><cylinder><radius>0.40</radius><length>3.90</length></cylinder></geometry>
+          <material>
+            <ambient>0.6 0.3 0.1 1</ambient>
+            <diffuse>0.7 0.4 0.15 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="pole_2">
+      <pose>7.00 -3.00 1.950 0 0 0</pose>
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry><cylinder><radius>0.40</radius><length>3.90</length></cylinder></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><cylinder><radius>0.40</radius><length>3.90</length></cylinder></geometry>
+          <material>
+            <ambient>0.6 0.3 0.1 1</ambient>
+            <diffuse>0.7 0.4 0.15 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="pole_3">
+      <pose>11.20 -2.70 1.950 0 0 0</pose>
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry><cylinder><radius>0.50</radius><length>3.90</length></cylinder></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><cylinder><radius>0.50</radius><length>3.90</length></cylinder></geometry>
+          <material>
+            <ambient>0.6 0.3 0.1 1</ambient>
+            <diffuse>0.7 0.4 0.15 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="pole_4">
+      <pose>11.00 3.10 1.950 0 0 0</pose>
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry><cylinder><radius>0.40</radius><length>3.90</length></cylinder></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><cylinder><radius>0.40</radius><length>3.90</length></cylinder></geometry>
+          <material>
+            <ambient>0.6 0.3 0.1 1</ambient>
+            <diffuse>0.7 0.4 0.15 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="pole_5">
+      <pose>15.30 2.90 1.950 0 0 0</pose>
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry><cylinder><radius>0.50</radius><length>3.90</length></cylinder></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><cylinder><radius>0.50</radius><length>3.90</length></cylinder></geometry>
+          <material>
+            <ambient>0.6 0.3 0.1 1</ambient>
+            <diffuse>0.7 0.4 0.15 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="pole_6">
+      <pose>15.50 -3.20 1.950 0 0 0</pose>
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry><cylinder><radius>0.40</radius><length>3.90</length></cylinder></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><cylinder><radius>0.40</radius><length>3.90</length></cylinder></geometry>
+          <material>
+            <ambient>0.6 0.3 0.1 1</ambient>
+            <diffuse>0.7 0.4 0.15 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="box_5">
+      <pose>2.60 -2.30 1.700 0 0 0</pose>
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>1.00 1.00 3.40</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>1.00 1.00 3.40</size></box></geometry>
+          <material>
+            <ambient>0.4 0.5 0.7 1</ambient>
+            <diffuse>0.5 0.6 0.8 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="box_6">
+      <pose>18.60 3.00 1.700 0 0 0</pose>
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>1.00 1.00 3.40</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>1.00 1.00 3.40</size></box></geometry>
+          <material>
+            <ambient>0.4 0.5 0.7 1</ambient>
+            <diffuse>0.5 0.6 0.8 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+  </world>
+</sdf>

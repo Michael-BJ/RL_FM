@@ -5,7 +5,7 @@ ROS2 Launch: expert_planning.launch.py + sitl.launch.py
 
 COMMAND YANG DIJALANKAN:
 ================================================================================
-ros2 launch neo_planner expert_planning.launch.py \
+ros2 launch fm_planner expert_planning.launch.py \
   pcd_path:=/home/michael/poles.pcd \
   target_samples:=500
 
@@ -21,7 +21,7 @@ SETUP GAZEBO (dari sitl.launch.py)
 
 Untuk menjalankan Gazebo dengan world "poles", gunakan:
 
-ros2 launch neo_planner sitl.launch.py vehicle:=x500_depth world:=poles
+ros2 launch fm_planner sitl.launch.py vehicle:=x500_depth world:=poles
 
 KONFIGURASI GAZEBO:
 -------------------
@@ -82,7 +82,7 @@ NODES YANG DIJALANKAN
 ================================================================================
 
 1. publish_pcd_node
-   Package         : neo_planner
+   Package         : fm_planner
    Executable      : publish_pcd_node
    Name            : publish_pcd_node
    Parameters:
@@ -107,12 +107,12 @@ NODES YANG DIJALANKAN
    - cloud_in -> /pointcloud/map
 
 3. mavros_tf_broadcaster_node
-   Package         : neo_planner
+   Package         : fm_planner
    Executable      : mavros_tf_broadcaster_node
    Name            : mavros_tf_broadcaster_expert
 
 4. expert_planner_node
-   Package         : neo_planner
+   Package         : fm_planner
    Executable      : expert_planner_node
    Name            : expert_planner_node
    Parameters:
@@ -166,7 +166,7 @@ TROUBLESHOOTING
 
 Jika expert_planner crash atau tidak merespons:
 1. Pastikan Gazebo sudah running:
-   ros2 launch neo_planner sitl.launch.py vehicle:=x500_depth world:=poles
+   ros2 launch fm_planner sitl.launch.py vehicle:=x500_depth world:=poles
 
 2. Tunggu sampai "Gazebo GUI" muncul (12 detik)
 
@@ -188,10 +188,10 @@ FULL LAUNCH COMMAND SEQUENCE
 ================================================================================
 
 Terminal 1 (Gazebo & PX4):
-ros2 launch neo_planner sitl.launch.py vehicle:=x500_depth world:=poles
+ros2 launch fm_planner sitl.launch.py vehicle:=x500_depth world:=poles
 
 Terminal 2 (Expert Planning - tunggu 15 detik, pastikan Gazebo GUI muncul):
-ros2 launch neo_planner expert_planning.launch.py \
+ros2 launch fm_planner expert_planning.launch.py \
   pcd_path:=/home/michael/poles.pcd \
   target_samples:=500
 

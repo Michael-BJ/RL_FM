@@ -1,0 +1,20 @@
+{
+    "python.defaultInterpreterPath": "/usr/bin/python3",
+    "python.analysis.extraPaths": [
+        "/opt/ros/jazzy/lib/python3.12/site-packages",
+        "/home/michael/neo_planner_ws/install/neo_planner/lib/python3.12/site-packages",
+        "/home/michael/neo_planner_ws/build/neo_planner",
+        "/home/michael/.local/lib/python3.12/site-packages",
+        "/usr/lib/python3/dist-packages"
+    ],
+    "python.autoComplete.extraPaths": [
+        "/opt/ros/jazzy/lib/python3.12/site-packages",
+        "/home/michael/neo_planner_ws/install/neo_planner/lib/python3.12/site-packages",
+        "/home/michael/neo_planner_ws/build/neo_planner",
+        "/home/michael/.local/lib/python3.12/site-packages",
+        "/usr/lib/python3/dist-packages"
+    ],
+    "terminal.integrated.env.linux": {
+        "PYTHONPATH": "/home/michael/neo_planner_ws/build/neo_planner:/home/michael/neo_planner_ws/install/neo_planner/lib/python3.12/site-packages:/opt/ros/jazzy/lib/python3.12/site-packages"
+    }
+}

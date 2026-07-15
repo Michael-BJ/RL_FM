@@ -1,12 +1,237 @@
-# for collecting dataset in expert nn_planner
-ros2 launch neo_planner sitl.launch.py world:=poles
-ros2 launch neo_planner mavros_only.launch.py
-ros2 launch neo_planner camera_vfh.launch.py
-ros2 launch neo_planner expert_planning.launch.py   pcd_path:=/home/michael/poles.pcd   target_samples:=1000
+# ════════════════════════════════════════════════════════════════════
+# COLLECTING DATASET — old world (poles, unimodal)
+# ════════════════════════════════════════════════════════════════════
+ros2 launch fm_planner sitl.launch.py world:=poles
+ros2 launch fm_planner mavros_only.launch.py
+ros2 launch fm_planner camera_vfh.launch.py
+ros2 launch fm_planner expert_planning.launch.py   pcd_path:=/home/michael/poles.pcd   target_samples:=1000
 
 
-# for inference
-ros2 launch neo_planner sitl.launch.py world:=forest1
-ros2 launch neo_planner mavros_only.launch.py
-ros2 launch neo_planner camera_vfh.launch.py
-ros2 launch neo_planner nn_planning_unknown.launch.py   model_path:=/home/michael/training_nn_planner/saved_net_01/planner_net.pth   goal_x:=20.0
+# ════════════════════════════════════════════════════════════════════
+# MULTIMODAL DATASET COLLECTION — poles_wide world (FM vs NN experiment)
+# The expert saves ALL feasible solutions per scene (left & right) as
+# separate CSV rows. See CLAUDE.md for details & how to revert.
+# save_all_modes default = true (multimodal ON without passing anything).
+# IMPORTANT: goal_x:=20.0 (last wide box at x=17; launch default is already
+# 20, written explicitly here so it never changes by accident).
+# Tip: try target_samples:=200 first to check the rows-per-scene ratio.
+# ════════════════════════════════════════════════════════════════════
+ros2 launch fm_planner sitl.launch.py world:=poles_wide
+ros2 launch fm_planner mavros_only.launch.py
+ros2 launch fm_planner camera_vfh.launch.py
+ros2 launch fm_planner expert_planning.launch.py   pcd_path:=/home/michael/neo_planner_ws/src/worlds/training_worlds/poles_wide.pcd   goal_x:=20.0   target_samples:=5000
+
+# revert to the old behavior (lowest-cost solution only, unimodal):
+#   add   save_all_modes:=false   to the expert_planning command above
+
+
+# ════════════════════════════════════════════════════════════════════
+# TRAINING (in ~/Training_model_FM_planner, not ROS)
+# Every run automatically creates a run_<timestamp> subfolder — never
+# overwrites previous results.
+# ════════════════════════════════════════════════════════════════════
+# NN-Planner (baseline):
+#   python3 nn_trainer.py --data_dir ~/training_data/run_XXXX --out_dir ~/saved_net/nn --epochs 50 --batch_size 16 --train_split 0.8
+# FM-Planner:
+#   python3 fm_trainer.py --data_dir ~/training_data/run_XXXX --out_dir ~/saved_net/fm --epochs 100 --batch_size 32 --train_split 0.8
+
+
+# ════════════════════════════════════════════════════════════════════
+# INFERENCE — NN planner (held-out test world: wide_test)
+# ════════════════════════════════════════════════════════════════════
+ros2 launch fm_planner sitl.launch.py world:=wide_test
+ros2 launch fm_planner mavros_only.launch.py
+ros2 launch fm_planner camera_vfh.launch.py
+ros2 launch fm_planner nn_planning_unknown.launch.py   model_path:=/home/michael/training_nn_planner/saved_net_01/planner_net.pth   goal_x:=20.0
+
+# old world:
+# ros2 launch fm_planner sitl.launch.py world:=forest1
+
+# ════════════════════════════════════════════════════════════════════
+# INFERENCE — FM planner (fm_planning_unknown.launch.py)
+# ════════════════════════════════════════════════════════════════════
+ros2 launch fm_planner sitl.launch.py world:=wide_test
+ros2 launch fm_planner mavros_only.launch.py
+ros2 launch fm_planner camera_vfh.launch.py
+ros2 launch fm_planner fm_planning_unknown.launch.py   model_path:=/home/michael/saved_net/fm/run_20260704_170810/fm_planner_20260704_170810.pth   goal_x:=20.0   K:=8   n_steps:=2
+
+
+# ════════════════════════════════════════════════════════════════════
+# BASELINE TEST + MONITORING — uji model existing di world ambiguitas
+# (sebelum collecting multimodal). flight_monitor.py = node pasif,
+# TIDAK perlu colcon build, jalankan langsung dengan python3 sebagai
+# TERMINAL KE-5 setelah planner jalan (atau sebelum — dia menunggu).
+# Merekam: sisi lewat (kiri/kanan/TENGAH!) per kotak lebar, clearance
+# ground-truth, escape/guard/replan-fail, statistik per lap + plot PNG.
+# Hasil: ~/monitor_logs/<label>_<world>_<timestamp>/
+# ════════════════════════════════════════════════════════════════════
+# NN di poles_wide (ganti world:=wide_test + --world wide_test utk held-out):
+#   T1: ros2 launch fm_planner sitl.launch.py world:=poles_wide
+#   T2: ros2 launch fm_planner mavros_only.launch.py
+#   T3: ros2 launch fm_planner camera_vfh.launch.py
+#   T4: ros2 launch fm_planner nn_inference.launch.py   model_path:=/home/michael/saved_net/planner_net_20260704_161214.pth   goal_x:=20.0
+#   T5:
+python3 ~/neo_planner_ws/src/fm_planner/fm_planner/flight_monitor.py --world poles_wide --goal-x 20.0 --label nn --laps 6
+
+# FM di world yang sama (T4 diganti, monitor --label fm):
+#   T4: ros2 launch fm_planner fm_planning_unknown.launch.py   model_path:=/home/michael/saved_net/fm/run_20260704_170810/fm_planner_20260704_170810.pth   goal_x:=20.0   K:=8
+#   T5:
+python3 ~/neo_planner_ws/src/fm_planner/fm_planner/flight_monitor.py --world poles_wide --goal-x 20.0 --label fm --laps 6
+
+# Interpretasi: NN unimodal diprediksi sering "TENGAH!"/escape di kotak
+# lebar (mode averaging); FM harus commit kiri ATAU kanan dengan bersih.
+# --laps 6 = berhenti otomatis setelah 6 lap; tanpa itu, stop dgn Ctrl+C
+# (laporan + plot tetap ditulis saat Ctrl+C).
+
+
+# ════════════════════════════════════════════════════════════════════
+# INFERENCE MODEL MULTIMODAL (train 2026-07-05) — protokol single-pass
+# unknown environment: world held-out wide_test, terbang SEKALI 0->20
+# (auto_reverse:=false), monitor --laps 1. Lihat CLAUDE.md paket bag. 7.
+# ════════════════════════════════════════════════════════════════════
+# Terminal 1-3 (selalu sama; hilangkan headless utk GUI):
+ros2 launch fm_planner sitl.launch.py world:=wide_test
+ros2 launch fm_planner mavros_only.launch.py
+ros2 launch fm_planner camera_vfh.launch.py
+
+# ── Terminal 4a: NN planner (model multimodal) ──
+ros2 launch fm_planner nn_inference.launch.py   model_path:=/home/michael/saved_net/nn/run_20260705_182409/planner_net_20260705_182409.pth   goal_x:=20.0   auto_reverse:=false
+
+# ── Terminal 4b: FM-MINIMAL (perbandingan resmi "hanya ganti model";
+#     persistence & steering default OFF) ──
+ros2 launch fm_planner fm_planning_unknown.launch.py   model_path:=/home/michael/saved_net/fm/run_20260705_190248/fm_planner_20260705_190248.pth   goal_x:=20.0   K:=8   n_steps:=2   auto_reverse:=false
+
+# ── Terminal 4c: FM+ (ablation sistem antisipatif: hysteresis mode +
+#     bimodal early-steering) ──
+ros2 launch fm_planner fm_planning_unknown.launch.py   model_path:=/home/michael/saved_net/fm/run_20260705_190248/fm_planner_20260705_190248.pth   goal_x:=20.0   K:=8   n_steps:=2   auto_reverse:=false   use_mode_persistence:=true   use_bimodal_steering:=true
+
+# ── Terminal 5: monitor (ganti --label sesuai run: nn / fm-minimal / fm-plus) ──
+python3 ~/neo_planner_ws/src/fm_planner/fm_planner/flight_monitor.py --world wide_test --goal-x 20.0 --label fm-minimal --laps 1
+
+# Utk uji 6-lap di world training (poles_wide): world:=poles_wide,
+# auto_reverse:=true (default), monitor --world poles_wide --laps 6.
+# CATATAN build: install saat ini BUKAN symlink — setelah edit .py di src,
+# rebuild (colcon build --packages-select fm_planner) atau cp manual ke
+# install/.../site-packages/fm_planner/ (lihat CLAUDE.md paket, bag. 2).
+
+
+# ════════════════════════════════════════════════════════════════════
+# WORLD DISKRIMINATOR — wall_gauntlet (dibuat 2026-07-06)
+# 3 dinding simetris eksak di y=0, lebar MENAIK 4.0/4.8/5.6 m + tiang
+# cermin (koridor luar 1.4 m). Klaim riset: NN (mode averaging -> warm
+# start tengah, tanpa mekanisme komitmen) macet/timeout di dinding
+# lebar; FM multimodal (+persistence) commit satu sisi sejak dini.
+# PRASYARAT: FM harus benar2 bimodal -> retrain --mirror_aug dulu
+# (checkpoint 20260706_130532 TERBUKTI unimodal, kandidat 2 sisi 3%).
+# goal_x WAJIB 22.0. Kriteria sukses per run: capai goal <= 90 s TANPA
+# escape/guard di dinding (bukan sekadar "sampai"). >= 5 trial/model.
+# ════════════════════════════════════════════════════════════════════
+ros2 launch fm_planner sitl.launch.py world:=wall_gauntlet
+ros2 launch fm_planner mavros_only.launch.py
+ros2 launch fm_planner camera_vfh.launch.py
+# T4 NN  : ros2 launch fm_planner nn_inference.launch.py   model_path:=<planner_net_mirroraug.pth>   goal_x:=22.0   auto_reverse:=false
+# T4 FM  : ros2 launch fm_planner fm_planning_unknown.launch.py   model_path:=<fm_planner_mirroraug.pth>   goal_x:=22.0   K:=8   auto_reverse:=false   use_mode_persistence:=true
+# T5     :
+python3 ~/neo_planner_ws/src/fm_planner/fm_planner/flight_monitor.py --world wall_gauntlet --goal-x 22.0 --label nn --laps 1
+
+
+# ════════════════════════════════════════════════════════════════════
+# TRAINING WORLDS SEDERHANA — src/worlds/training_worlds/ (dibuat 2026-07-08)
+# 5 world atom (1 konsep obstacle/world, bentuk & dimensi beda-beda) dibuat
+# setelah diagnosis: dataset FM SELAMA INI 100% dari 1 world kompleks
+# (gauntlet_train) -> cuma 9.2% scene ambigu, variasi visual sempit ->
+# dicurigai jadi penyebab utama FM mode-collapse (0/17 scene ambigu held-out
+# genuinely bimodal saat disampel 300x, lihat CLAUDE.md). goal_x:=20.0,
+# arena bounds DEFAULT (tidak perlu override arena_x_max seperti
+# gauntlet_train/test01). Ganti nama world untuk masing2 dari 5:
+#   box_narrow (lebar 1.3/1.6m) | box_wide (2.6/3.2m) | cylinder_fat
+#   (silinder diameter 1.4/2.2m) | twin_pole_gate (sepasang tiang, celah
+#   0.3/0.7m) | plate_wall (plat tipis lebar sy 2.2/3.4m)
+# ════════════════════════════════════════════════════════════════════
+ros2 launch fm_planner sitl.launch.py world:=box_narrow
+ros2 launch fm_planner mavros_only.launch.py
+ros2 launch fm_planner camera_vfh.launch.py
+ros2 launch fm_planner expert_planning.launch.py   pcd_path:=/home/michael/neo_planner_ws/src/worlds/training_worlds/box_narrow.pcd   goal_x:=20.0   target_samples:=1500
+
+# ulangi utk box_wide.pcd, cylinder_fat.pcd, twin_pole_gate.pcd, plate_wall.pcd
+
+# Setelah SEMUA 5 world + gauntlet_train terkumpul, gabung (pool, bukan
+# curriculum bertahap) jadi satu training run:
+#   python3 fm_trainer.py --data_dir \
+#       ~/training_data/run_<gauntlet_train> \
+#       ~/training_data/run_<box_narrow> ~/training_data/run_<box_wide> \
+#       ~/training_data/run_<cylinder_fat> ~/training_data/run_<twin_pole_gate> \
+#       ~/training_data/run_<plate_wall> \
+#       --out_dir ~/saved_net/fm --epochs 100 --batch_size 32
+
+
+# ════════════════════════════════════════════════════════════════════
+# EKSPERIMEN PENENTU (go/no-go) — NN vs FM-minimal, 2026-07-10
+# Model retrain 2026-07-09 (pasca-fix mode-collapse; GATE bimodal 64%
+# vs 3% checkpoint lama). SEMUA perbandingan sebelumnya memakai
+# checkpoint FM yang collapse — ini perbandingan fair PERTAMA.
+#
+# ATURAN (keputusan user 2026-07-10):
+#  - MODE FAIR (v2.3, 2026-07-10): use_safety_guards:=false
+#    use_lookahead_guard:=true -> HANYA look-ahead guard (aksi
+#    invalidate+hover, BUKAN escape) + hard post-check + tracking-gap.
+#    TANPA escape/no-progress/proximity rescue. Alasan: guards penuh-OFF
+#    membuat wall_gauntlet "kedua model gagal" (NN macet, FM CRASH/meledak
+#    2026-07-10) karena hilangnya look-ahead = tak ada yang mengompensasi
+#    octomap telat -> tabrak dinding yang belum termapping (artefak latency,
+#    bukan sinyal kualitas model). Mode fair mencegah crash tanpa menambah
+#    rescue -> perbandingan bisa SELESAI. Pengaman peta SAMA utk NN & FM.
+#  - (Lama, penuh-OFF: use_safety_guards:=false saja -> TANPA guard sama
+#    sekali. Terbukti membuat wall_gauntlet crash keduanya; simpan hanya
+#    utk 'karakterisasi kegagalan', bukan perbandingan penyelesaian.)
+#  - Arena bounds ESDF inference AKTIF (default sejak v2.2) — bukan
+#    safety, tapi pengetahuan lingkungan; identik utk KEDUA model.
+#  - >=5 trial per konfigurasi per world, single-pass
+#    (auto_reverse:=false), monitor --laps 1.
+#  - RESTART SITL tiap trial (wajib bila PHYSICS EXPLOSION/EKF drift).
+#  - Label monitor pakai DASH: nnD-t1..t5 / fmD-t1..t5 (dibaca
+#    decisive_eval.py; jangan pakai underscore di label).
+#
+# KRITERIA GO/NO-GO (ditetapkan SEBELUM run — jangan diubah pasca-hasil):
+#  wall_gauntlet = diskriminator utama. FM "go" bila goal-rate dan/atau
+#  kejadian TENGAH/tabrakan (min_clear<0.2) lebih baik dari NN secara
+#  konsisten. Bila FM TIDAK lebih baik dari NN di wall_gauntlet padahal
+#  GATE bimodal >=30% -> klaim inti riset gugur -> STOP jalur FM,
+#  tulis sebagai negative result (dataset+tooling tetap reusable).
+#
+# Rekap otomatis setelah semua trial:
+#   python3 ~/neo_planner_ws/src/fm_planner/fm_planner/decisive_eval.py
+# ════════════════════════════════════════════════════════════════════
+
+# ── A. wall_gauntlet (goal_x 22.0, arena default) — t1..t5 ──
+ros2 launch fm_planner sitl.launch.py world:=wall_gauntlet
+ros2 launch fm_planner mavros_only.launch.py
+ros2 launch fm_planner camera_vfh.launch.py
+# T4 NN:
+ros2 launch fm_planner nn_inference.launch.py   model_path:=/home/michael/saved_net/nn/run_20260709_114526/planner_net_20260709_114526.pth   goal_x:=22.0   auto_reverse:=false   use_safety_guards:=false   use_lookahead_guard:=true
+# T4 FM (FM-minimal — persistence/steering default OFF):
+ros2 launch fm_planner fm_planning_unknown.launch.py   model_path:=/home/michael/saved_net/fm/run_20260709_113954/fm_planner_20260709_113954.pth   goal_x:=22.0   K:=8   n_steps:=2   auto_reverse:=false   use_safety_guards:=false   use_lookahead_guard:=true
+# T5 (ganti label per trial: nnD-t1 / fmD-t1 dst):
+python3 ~/neo_planner_ws/src/fm_planner/fm_planner/flight_monitor.py --world wall_gauntlet --goal-x 22.0 --label nnD-t1 --laps 1
+
+# ── B. test01 (goal_x 30.0 -> WAJIB arena_x_max:=33.0 di T4!) — t1..t5 ──
+ros2 launch fm_planner sitl.launch.py world:=test01
+# T4 NN:
+ros2 launch fm_planner nn_inference.launch.py   model_path:=/home/michael/saved_net/nn/run_20260709_114526/planner_net_20260709_114526.pth   goal_x:=30.0   arena_x_max:=33.0   auto_reverse:=false   use_safety_guards:=false   use_lookahead_guard:=true
+# T4 FM:
+ros2 launch fm_planner fm_planning_unknown.launch.py   model_path:=/home/michael/saved_net/fm/run_20260709_113954/fm_planner_20260709_113954.pth   goal_x:=30.0   arena_x_max:=33.0   K:=8   n_steps:=2   auto_reverse:=false   use_safety_guards:=false   use_lookahead_guard:=true
+# T5:
+python3 ~/neo_planner_ws/src/fm_planner/fm_planner/flight_monitor.py --world test01 --goal-x 30.0 --label nnD-t1 --laps 1
+
+# ── C. wide_test (goal_x 20.0, arena default) — t1..t5 ──
+ros2 launch fm_planner sitl.launch.py world:=wide_test
+# T4 NN:
+ros2 launch fm_planner nn_inference.launch.py   model_path:=/home/michael/saved_net/nn/run_20260709_114526/planner_net_20260709_114526.pth   goal_x:=20.0   auto_reverse:=false   use_safety_guards:=false   use_lookahead_guard:=true
+# T4 FM:
+ros2 launch fm_planner fm_planning_unknown.launch.py   model_path:=/home/michael/saved_net/fm/run_20260709_113954/fm_planner_20260709_113954.pth   goal_x:=20.0   K:=8   n_steps:=2   auto_reverse:=false   use_safety_guards:=false   use_lookahead_guard:=true
+# T5:
+python3 ~/neo_planner_ws/src/fm_planner/fm_planner/flight_monitor.py --world wide_test --goal-x 20.0 --label nnD-t1 --laps 1
+
+# Catatan trial gagal-tanpa-goal: kalau drone macet permanen (tanpa
+# escape, itu memang mungkin), hentikan monitor dgn Ctrl+C — laporan
+# tetap ditulis (laps=0 = trial gagal, ikut dihitung decisive_eval).

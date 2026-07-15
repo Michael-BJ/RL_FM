@@ -1,16 +1,19 @@
-# NEO-Planner (ROS 2 / PX4)
+# fm_planner (ROS 2 / PX4)
 
-**NEO-Planner** deployment package for obstacle-avoiding drone navigation,
+**fm_planner** is a deployment package for obstacle-avoiding drone navigation,
 running on **ROS 2 Jazzy** with **PX4 SITL + Gazebo (gz sim) + MAVROS**.
 
-NEO-Planner is a *learning-based local planner*: a neural network learns to map
+The package is a *learning-based local planner*: a neural network learns to map
 **depth image + drone state + target** directly into a safe **minimum-jerk
-trajectory**, imitating an **expert planner** (MINCO optimization + ESDF). This
-package provides both sides:
+trajectory**, imitating an **expert planner** (MINCO optimization + ESDF). Two
+inference pipelines are provided side by side — the original **NEO-Planner**
+(single-hypothesis NN regressor) and the newer **FM-Planner** (Flow Matching,
+multimodal candidate sampling) — plus the expert pipeline that generates their
+training data:
 
 1. **Dataset collection (expert)** — flies the drone with the expert planner and
    records input→trajectory pairs.
-2. **Inference (NN)** — deploys the trained network to fly in unknown
+2. **Inference (NN / FM)** — deploys the trained network to fly in unknown
    environments.
 
 ---
@@ -48,7 +51,8 @@ package provides both sides:
    vfh_obstacle_avoidance        │                    octomap_server
                                  │                         │ /projected_map
                  ┌───────────────▼─────────────────────────▼────┐
-                 │  expert_planner_node  /  neo_planner_node     │
+                 │ expert_planner_node / nn_inference_node /     │
+                 │ fm_inference_node / legacy_inference_node     │
                  │   ESDF → MINCO optimizer → trajectory         │
                  │   → /mavros/setpoint_raw/local                │
                  └───────────────────────────────────────────────┘
@@ -89,10 +93,10 @@ be ready).
 
 ### A. Dataset collection (expert)
 ```bash
-ros2 launch neo_planner sitl.launch.py world:=poles
-ros2 launch neo_planner mavros_only.launch.py
-ros2 launch neo_planner camera_vfh.launch.py
-ros2 launch neo_planner expert_planning.launch.py \
+ros2 launch fm_planner sitl.launch.py world:=poles
+ros2 launch fm_planner mavros_only.launch.py
+ros2 launch fm_planner camera_vfh.launch.py
+ros2 launch fm_planner expert_planning.launch.py \
     pcd_path:=$HOME/poles.pcd target_samples:=500
 ```
 The dataset is saved to `~/training_data/run_<timestamp>/`. Add `headless:=true`
@@ -100,10 +104,10 @@ to `sitl.launch.py` to run without the GUI.
 
 ### B. Inference (NN)
 ```bash
-ros2 launch neo_planner sitl.launch.py world:=forest1
-ros2 launch neo_planner mavros_only.launch.py
-ros2 launch neo_planner camera_vfh.launch.py
-ros2 launch neo_planner nn_planning_unknown.launch.py \
+ros2 launch fm_planner sitl.launch.py world:=forest1
+ros2 launch fm_planner mavros_only.launch.py
+ros2 launch fm_planner camera_vfh.launch.py
+ros2 launch fm_planner nn_planning_unknown.launch.py \
     model_path:=$HOME/training_nn_planner/saved_net_01/planner_net.pth \
     goal_x:=20.0
 ```

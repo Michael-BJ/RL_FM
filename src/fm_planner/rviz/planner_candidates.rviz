@@ -1,0 +1,92 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+    Property Tree Widget:
+      Expanded:
+        - /Global Options1
+        - /Candidates (model)1
+      Splitter Ratio: 0.5
+    Tree Height: 640
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid
+      Enabled: true
+      Color: 160; 160; 164
+      Line Style:
+        Line Width: 0.03
+        Value: Lines
+      Cell Size: 1
+      Plane Cell Count: 60
+      Reference Frame: <Fixed Frame>
+    - Class: rviz_default_plugins/TF
+      Name: TF
+      Enabled: true
+      Show Names: true
+      Show Axes: true
+      Marker Scale: 1.2
+    - Class: rviz_default_plugins/Map
+      Name: OctoMap (projected)
+      Enabled: true
+      Topic:
+        Value: /projected_map
+        Depth: 5
+        Durability Policy: Volatile
+        Reliability Policy: Reliable
+      Color Scheme: costmap
+      Draw Behind: true
+      Alpha: 0.7
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Candidates (model)
+      Enabled: true
+      Namespaces:
+        {}
+      Topic:
+        Value: /planner/candidates
+        Depth: 5
+        Durability Policy: Volatile
+        Reliability Policy: Reliable
+  Global Options:
+    Background Color: 25; 25; 30
+    Fixed Frame: odom
+    Frame Rate: 30
+  Name: root
+  Tools:
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/FocusCamera
+    - Class: rviz_default_plugins/Measure
+  Value: true
+  Views:
+    Current:
+      Class: rviz_default_plugins/TopDownOrtho
+      Name: TopDown
+      Angle: 0
+      Scale: 26
+      Target Frame: base_link
+      X: 8
+      Y: 0
+    Saved:
+      - Class: rviz_default_plugins/TopDownOrtho
+        Name: TopDown-Fixed
+        Angle: 0
+        Scale: 22
+        Target Frame: <Fixed Frame>
+        X: 12
+        Y: 0
+      - Class: rviz_default_plugins/Orbit
+        Name: Orbit3D
+        Distance: 30
+        Pitch: 0.9
+        Yaw: 3.14
+        Focal Point:
+          X: 10
+          Y: 0
+          Z: 1.5
+Window Geometry:
+  Displays:
+    collapsed: false
+  Height: 900
+  Width: 1500
+  Hide Left Dock: false
+  Hide Right Dock: true

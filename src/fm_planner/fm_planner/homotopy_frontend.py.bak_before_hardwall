@@ -1,0 +1,446 @@
+#!/usr/bin/env python3
+# homotopy_frontend.py — v1.1 — Topological multi-homotopy seed generator for the expert planner
+"""
+homotopy_frontend.py — Topological front-end for expert data collection
+==========================================================================
+CHANGELOG
+  v1.2 (2026-07-07)  + budget waktu: diversifikasi A* berhenti setelah
+                     ASTAR_BUDGET_S dan optimasi seed sisa dilewati setelah
+                     TOTAL_BUDGET_S (>=1 seed selalu dioptimasi). Alasan: di
+                     kantong sempit (koridor bawah R2, run_20260707_160427)
+                     find_paths 5 ronde + 3x MINCO menembus budget replan
+                     node (3 s) -> "Replan failed (budget)" beruntun ->
+                     drone melacak trajektori basi -> escape ping-pong ->
+                     PHYSICS EXPLOSION. Replan lambat lebih berbahaya
+                     daripada replan kurang lengkap.
+  v1.1 (2026-07-07)  + `bounds` (x_min, x_max, y_min, y_max): sel di luar
+                     batas diblokir untuk A*. WAJIB diisi batas arena expert
+                     (dengan inset ~0.5 m): grid ESDF membentang seluas pcd
+                     (y +-15) sedangkan arena hanya y +-6 — tanpa ini A*
+                     memilih rute "bebas-penalti" MEMUTARI LUAR tiang cermin
+                     dan drone keluar arena (teramati run_20260707_131700:
+                     out-of-bounds berulang di y 6.0-6.9 dekat R3/R5).
+  v1.0 (2026-07-06)  Initial version. A* over the expert's ESDF grid +
+                     iterative corridor-penalty diversification + side-
+                     signature dedup + cost-window filter. Drop-in via
+                     patch_planner() — no edits needed inside
+                     expert_planner_node.py beyond 2 lines in __init__.
+
+WHY THIS FILE EXISTS (research context)
+  The expert's batch_plan uses 3 hardcoded seeds (straight, ±0.6 m lateral).
+  Result measured 2026-07-05/06: dataset run_20260705_172250 has only 164/5000
+  (3.3%) different-side scenes, and the FM checkpoint trained on it is
+  effectively UNIMODAL (two-sided candidate fraction ~3% in flight).
+  Mirror-y augmentation balances sides ACROSS scenes (mirrored depth is a
+  DIFFERENT observation) — it cannot give one observation two labels.
+  Only the expert can: it must find BOTH detours for the SAME scene.
+
+  This module replaces the fixed-offset seed generation with homotopy-class
+  enumeration on the ground-truth ESDF (the expert runs offline — it is
+  allowed to be expensive). Approach follows established topological planning
+  practice (topo-PRM in RAPTOR, Zhou et al., T-RO 2021; TEB parallel-topology
+  planning, Roesmann et al.; penalty-based k-diverse-paths heuristics).
+  It is deliberately NOT claimed as a contribution — it is the *teacher*.
+  The paper sentence it supports:
+    "For data collection we replace the expert's three fixed initializations
+     with a topological front-end [cit], ensuring the dataset contains every
+     cost-competitive homotopy class per scene."
+
+WHAT IT DOES per replanning event
+  1. A* from head to tail on the ESDF occupancy/clearance grid
+     (soft clearance-aware edge costs -> paths keep sensible margins).
+  2. Accept the path, compute its SIDE SIGNATURE: the sign of the path's
+     lateral offset at each interval where the straight head->tail line is
+     blocked (one sign per blocked obstacle interval -> e.g. (+1,) = left).
+  3. Paint an additive penalty over the accepted path's corridor and rerun
+     A* -> the next path is pushed into a different homotopy class.
+  4. Repeat until signatures repeat / max_iters. Deduplicate by signature.
+  5. Downsample each path into MINCO seeds (init_wpts_num interior waypoints
+     by arc length + length-based time allocation) and hand every seed to the
+     planner via read_planning_conditions + plan_once.
+  6. Keep every converged solution whose cost <= cost_window x best (default
+     1.5x, ONE interpretable parameter: "cost-competitive modes"), store them
+     in planner.all_solutions exactly like the stock batch_plan so the
+     save_all_modes recorder keeps working unchanged. The DRONE still flies
+     the single best solution — only the DATASET gets richer.
+
+INTEGRATION (2 lines in expert_planner_node.py __init__, after
+self._planner and self._esdf exist; every existing batch_plan call site
+— including the fallback semantics — keeps working untouched):
+
+    from homotopy_frontend import patch_planner
+    patch_planner(self._planner)            # add use_topo=False to disable
+
+  To A/B against the stock expert, launch-param it:
+    self.declare_parameter("use_topo_frontend", True)
+    if bool(self.get_parameter("use_topo_frontend").value):
+        patch_planner(self._planner)
+
+FAIRNESS NOTE (methodology decision 2026-07-05 still holds)
+  Only the TEACHER changes. Deployment planners (NEO 3-seed baseline,
+  nn_inference_node, fm_inference_node) are untouched; NN and FM both train
+  on the same new dataset. Official comparison stays "only swap the model".
+
+SELF-TEST (no ROS needed):
+    python3 homotopy_frontend.py
+  Builds a synthetic ESDF with one 2.6 m wide box dead ahead and asserts the
+  front-end finds BOTH side classes (left & right) — the exact capability the
+  3-seed expert lacks for obstacles wider than ~1.2 m.
+"""
+import heapq
+import math
+import time
+
+import numpy as np
+
+# ── Tunables ────────────────────────────────────────────────────────────────
+MAX_CLASSES        = 3      # keep at most this many distinct homotopy classes
+MAX_SEARCH_ITERS   = 5      # A* diversification rounds (>= MAX_CLASSES)
+COST_WINDOW        = 1.5    # keep solutions with cost <= 1.5 x best (post-opt)
+SOFT_CLEARANCE     = 0.6    # m — below this, edge cost grows (path keeps margin)
+CLEARANCE_WEIGHT   = 3.0    # strength of the soft-clearance edge cost
+HARD_CLEARANCE     = 0.15   # m — cells with edt below this are untraversable
+CORRIDOR_RADIUS    = 0.8    # m — penalty brush radius around an accepted path
+CORRIDOR_PENALTY   = 6.0    # additive per-cell penalty (in "meters" of cost)
+BLOCK_THRESH       = 0.35   # m — straight-line edt below this marks a blocked
+                            #     interval (used for the side signature)
+MIN_SIG_GAP_M      = 0.8    # merge blocked intervals closer than this
+PATH_SPEED_FRAC    = 0.7    # seed time allocation assumes 0.7 * v_max cruise
+GOAL_TOL_CELLS     = 1      # A* goal tolerance (cells)
+ASTAR_BUDGET_S     = 0.7    # s — stop ronde diversifikasi A* setelah ini
+TOTAL_BUDGET_S     = 1.5    # s — lewati optimasi seed sisa setelah ini.
+                            # Harus jauh < budget replan node (3.0 s):
+                            # satu plan_once MINCO yang sulit bisa 1-4 s
+                            # dan TIDAK bisa dipotong di tengah — sisakan
+                            # headroom (pelajaran explosion #2, R6 return).
+
+_SQRT2 = math.sqrt(2.0)
+_NBRS = [(-1, -1, _SQRT2), (-1, 0, 1.0), (-1, 1, _SQRT2),
+         (0, -1, 1.0),                   (0, 1, 1.0),
+         (1, -1, _SQRT2),  (1, 0, 1.0),  (1, 1, _SQRT2)]
+
+
+class HomotopyFrontEnd:
+    """Enumerates cost-competitive homotopy classes on an ESDF grid and turns
+    each into a MINCO warm-start seed (int_wpts, ts)."""
+
+    def __init__(self,
+                 max_classes=MAX_CLASSES,
+                 max_iters=MAX_SEARCH_ITERS,
+                 soft_clearance=SOFT_CLEARANCE,
+                 clearance_weight=CLEARANCE_WEIGHT,
+                 hard_clearance=HARD_CLEARANCE,
+                 corridor_radius=CORRIDOR_RADIUS,
+                 corridor_penalty=CORRIDOR_PENALTY,
+                 bounds=None):
+        self.max_classes      = int(max_classes)
+        self.max_iters        = int(max_iters)
+        self.soft_clearance   = float(soft_clearance)
+        self.clearance_weight = float(clearance_weight)
+        self.hard_clearance   = float(hard_clearance)
+        self.corridor_radius  = float(corridor_radius)
+        self.corridor_penalty = float(corridor_penalty)
+        # (x_min, x_max, y_min, y_max) world — sel di luar diblokir untuk A*.
+        # None = tanpa batas (self-test). Isi dengan arena expert MINUS inset
+        # ~0.5 m supaya trajektori MINCO/tracking error tidak menyentuh batas.
+        self.bounds = tuple(float(b) for b in bounds) if bounds else None
+
+    # ── public API ──────────────────────────────────────────────────────────
+
+    def find_paths(self, esdf, start_xy, goal_xy):
+        """-> list of (path_xy [N,2] world coords, signature tuple).
+        One entry per distinct homotopy class, best-first. Empty list if the
+        grid is unusable or no path exists."""
+        grid = getattr(esdf, "esdf_map", None)
+        if grid is None or getattr(esdf, "map_origin", None) is None:
+            return []
+        res = float(esdf.map_resolution)
+        ox  = float(esdf.map_origin.x)
+        oy  = float(esdf.map_origin.y)
+        edt = np.asarray(grid, dtype=np.float64)          # (rows, cols), meters
+        rows, cols = edt.shape
+
+        def to_cell(p):
+            r = int(round((p[1] - oy) / res))
+            c = int(round((p[0] - ox) / res))
+            return (min(max(r, 0), rows - 1), min(max(c, 0), cols - 1))
+
+        def to_world(rc):
+            return np.array([ox + rc[1] * res, oy + rc[0] * res])
+
+        start = to_cell(start_xy)
+        goal  = to_cell(goal_xy)
+
+        # Base traversal cost field: 0 in open space, grows inside the soft
+        # margin. hard-blocked cells get +inf — EXCEPT we never block the
+        # start/goal cells themselves (the drone may legitimately be inside
+        # the soft margin when replanning; mirrors the node's adaptive
+        # safe_dis logic).
+        soft = np.maximum(0.0, self.soft_clearance - edt) / self.soft_clearance
+        base = self.clearance_weight * soft
+        blocked = edt < self.hard_clearance
+        if self.bounds is not None:
+            bx0, bx1, by0, by1 = self.bounds
+            ys_ax = oy + np.arange(rows) * res
+            xs_ax = ox + np.arange(cols) * res
+            blocked |= ((ys_ax < by0) | (ys_ax > by1))[:, None]
+            blocked |= ((xs_ax < bx0) | (xs_ax > bx1))[None, :]
+        blocked[start] = False
+        blocked[goal]  = False
+
+        extra = np.zeros_like(edt)                        # corridor penalties
+        found, sigs = [], set()
+        t0 = time.monotonic()
+        for _ in range(self.max_iters):
+            path_rc = self._astar(base, extra, blocked, start, goal, res)
+            if path_rc is None:
+                break
+            path_xy = np.array([to_world(rc) for rc in path_rc])
+            sig = self._signature(edt, res, ox, oy, start_xy, goal_xy, path_xy)
+            if sig not in sigs:
+                sigs.add(sig)
+                found.append((path_xy, sig))
+                if len(found) >= self.max_classes:
+                    break
+            # Penalize this corridor either way (repeat signature = A* is
+            # stuck in the same channel; push harder next round).
+            self._paint_corridor(extra, path_rc, res)
+            # v1.2: replan lambat lebih berbahaya daripada kurang lengkap —
+            # kelas yang sudah ketemu tetap dipakai, sisanya dilewati.
+            if time.monotonic() - t0 > ASTAR_BUDGET_S:
+                break
+        return found
+
+    def seeds_from_paths(self, paths, head_state, tail_state, planner):
+        """-> list of (int_wpts (D, n), ts (n+1,)) MINCO seeds, one per path.
+        Waypoints by arc length at fractions i/(n+1); time allocation from
+        path length at PATH_SPEED_FRAC * v_max, clipped to [T_min, T_max]."""
+        n = int(planner.init_wpts_num)
+        seeds = []
+        for path_xy, _sig in paths:
+            seg = np.linalg.norm(np.diff(path_xy, axis=0), axis=1)
+            cum = np.concatenate([[0.0], np.cumsum(seg)])
+            total = float(cum[-1])
+            if total < 1e-6:
+                continue
+            wpts = []
+            for i in range(1, n + 1):
+                s = total * i / (n + 1)
+                j = int(np.searchsorted(cum, s, side="right")) - 1
+                j = min(max(j, 0), len(seg) - 1)
+                a = (s - cum[j]) / max(seg[j], 1e-9)
+                wpts.append(path_xy[j] * (1 - a) + path_xy[j + 1] * a)
+            int_wpts = np.array(wpts).T                    # (D, n)
+            v = max(PATH_SPEED_FRAC * float(planner.v_max), 1e-3)
+            t_piece = (total / v) / (n + 1)
+            t_piece = float(np.clip(t_piece,
+                                    planner.T_min + 1e-3,
+                                    planner.T_max - 1e-3))
+            ts = t_piece * np.ones(n + 1)
+            ts[0]  = min(ts[0] * 1.5, planner.T_max - 1e-3)
+            ts[-1] = min(ts[-1] * 1.5, planner.T_max - 1e-3)
+            seeds.append((int_wpts, ts))
+        return seeds
+
+    # ── internals ───────────────────────────────────────────────────────────
+
+    def _astar(self, base, extra, blocked, start, goal, res):
+        rows, cols = base.shape
+        gscore = np.full(base.shape, np.inf)
+        gscore[start] = 0.0
+        came = {}
+        h0 = math.hypot(goal[0] - start[0], goal[1] - start[1])
+        heap = [(h0, start)]
+        closed = np.zeros(base.shape, dtype=bool)
+        while heap:
+            _, cur = heapq.heappop(heap)
+            if closed[cur]:
+                continue
+            closed[cur] = True
+            if (abs(cur[0] - goal[0]) <= GOAL_TOL_CELLS
+                    and abs(cur[1] - goal[1]) <= GOAL_TOL_CELLS):
+                path = [cur]
+                while cur in came:
+                    cur = came[cur]
+                    path.append(cur)
+                return path[::-1]
+            for dr, dc, step in _NBRS:
+                r, c = cur[0] + dr, cur[1] + dc
+                if r < 0 or r >= rows or c < 0 or c >= cols:
+                    continue
+                if blocked[r, c] or closed[r, c]:
+                    continue
+                cost = step * res * (1.0 + base[r, c] + extra[r, c])
+                ng = gscore[cur] + cost
+                if ng < gscore[r, c]:
+                    gscore[r, c] = ng
+                    came[(r, c)] = cur
+                    h = math.hypot(goal[0] - r, goal[1] - c) * res
+                    heapq.heappush(heap, (ng + h, (r, c)))
+        return None
+
+    def _paint_corridor(self, extra, path_rc, res):
+        rad = max(1, int(round(self.corridor_radius / res)))
+        rows, cols = extra.shape
+        for (r, c) in path_rc:
+            r0, r1 = max(0, r - rad), min(rows, r + rad + 1)
+            c0, c1 = max(0, c - rad), min(cols, c + rad + 1)
+            extra[r0:r1, c0:c1] = np.maximum(
+                extra[r0:r1, c0:c1], self.corridor_penalty)
+
+    def _signature(self, edt, res, ox, oy, start_xy, goal_xy, path_xy):
+        """Side signature: for each interval where the STRAIGHT start->goal
+        line is blocked (edt < BLOCK_THRESH), the sign of the path's lateral
+        offset at that arc fraction. ('free',) if the straight line is clear
+        (single trivial class)."""
+        axis = np.asarray(goal_xy, dtype=float) - np.asarray(start_xy, float)
+        L = float(np.linalg.norm(axis))
+        if L < 1e-6:
+            return ("free",)
+        axis /= L
+        n_samp = max(int(L / res), 2)
+        fr = np.linspace(0.0, 1.0, n_samp)
+        pts = np.asarray(start_xy) + fr[:, None] * axis[None, :] * L
+        rows, cols = edt.shape
+        rr = np.clip(np.round((pts[:, 1] - oy) / res).astype(int), 0, rows - 1)
+        cc = np.clip(np.round((pts[:, 0] - ox) / res).astype(int), 0, cols - 1)
+        blocked = edt[rr, cc] < BLOCK_THRESH
+        if not blocked.any():
+            return ("free",)
+        # merge blocked runs closer than MIN_SIG_GAP_M into one interval
+        idx = np.where(blocked)[0]
+        gaps = np.where(np.diff(idx) * (L / n_samp) > MIN_SIG_GAP_M)[0]
+        groups = np.split(idx, gaps + 1)
+
+        seg = np.linalg.norm(np.diff(path_xy, axis=0), axis=1)
+        cum = np.concatenate([[0.0], np.cumsum(seg)])
+        total = max(float(cum[-1]), 1e-9)
+        signs = []
+        for g in groups:
+            f_mid = float(fr[g].mean())
+            s = total * f_mid
+            j = int(np.searchsorted(cum, s, side="right")) - 1
+            j = min(max(j, 0), len(seg) - 1)
+            a = (s - cum[j]) / max(seg[j], 1e-9)
+            p = path_xy[j] * (1 - a) + path_xy[j + 1] * a
+            rel = p - np.asarray(start_xy)
+            lat = axis[0] * rel[1] - axis[1] * rel[0]   # + = left of axis
+            signs.append(1 if lat >= 0.0 else -1)
+        return tuple(signs)
+
+
+def topo_batch_plan(planner, esdf, head_state, tail_state,
+                    frontend=None, fallback=None, cost_window=COST_WINDOW):
+    """Drop-in replacement for MinJerkPlanner.batch_plan (same signature after
+    binding `planner`): topological seeds -> optimize each -> keep every
+    solution within cost_window x best in planner.all_solutions; best goes to
+    planner.int_wpts / planner.ts / planner.final_cost (the drone flies it).
+    Falls back to the stock 3-seed batch_plan when the grid is unusable, no
+    path is found, or every optimization fails."""
+    frontend = frontend or HomotopyFrontEnd()
+    fallback = fallback or planner.batch_plan
+
+    t0 = time.monotonic()
+    paths = frontend.find_paths(esdf, np.asarray(head_state[0], float),
+                                np.asarray(tail_state[0], float))
+    seeds = frontend.seeds_from_paths(paths, head_state, tail_state, planner)
+    if not seeds:
+        return fallback(esdf, head_state, tail_state)
+
+    solutions = []
+    for int_wpts, ts in seeds:
+        # v1.2: >=1 seed selalu dioptimasi; sisanya dilewati bila total
+        # waktu sudah melewati TOTAL_BUDGET_S (jaga replan < budget node).
+        if solutions and time.monotonic() - t0 > TOTAL_BUDGET_S:
+            break
+        try:
+            planner.read_planning_conditions(
+                esdf, head_state, tail_state, int_wpts, ts.copy())
+            planner.plan_once()
+            solutions.append((planner.int_wpts.copy(), planner.ts.copy(),
+                              float(planner.weighted_cost.sum())))
+        except Exception:
+            continue
+    if not solutions:
+        return fallback(esdf, head_state, tail_state)
+
+    solutions.sort(key=lambda s: s[2])
+    best_cost = solutions[0][2]
+    kept = [s for s in solutions
+            if s[2] <= cost_window * best_cost] or solutions[:1]
+
+    planner.all_solutions = kept                   # recorder reads this
+    planner.int_wpts   = kept[0][0].copy()         # drone flies the best
+    planner.ts         = kept[0][1].copy()
+    planner.final_cost = kept[0][2]
+    planner.get_coeffs(planner.int_wpts, planner.ts)
+
+
+def patch_planner(planner, frontend=None, cost_window=COST_WINDOW,
+                  bounds=None):
+    """Monkey-patch planner.batch_plan -> topo_batch_plan (stock batch_plan is
+    kept as the fallback). All existing call sites in expert_planner_node.py
+    keep working untouched. Returns the unpatch function.
+    `bounds` (x_min, x_max, y_min, y_max): batas arena untuk A* (v1.1) —
+    hanya dipakai bila `frontend` tidak diberikan."""
+    stock = planner.batch_plan
+    fe = frontend or HomotopyFrontEnd(bounds=bounds)
+
+    def _patched(esdf, head_state, tail_state):
+        return topo_batch_plan(planner, esdf, head_state, tail_state,
+                               frontend=fe, fallback=stock,
+                               cost_window=cost_window)
+
+    planner.batch_plan = _patched
+
+    def unpatch():
+        planner.batch_plan = stock
+    return unpatch
+
+
+# ── Self-test: 2.6 m box dead ahead -> must find BOTH side classes ──────────
+if __name__ == "__main__":
+    try:
+        from scipy import ndimage
+    except ImportError:
+        raise SystemExit("self-test needs scipy (pip install scipy)")
+
+    class _Origin:
+        x, y = -2.0, -6.0
+
+    class _MockESDF:
+        map_resolution = 0.1
+        map_origin = _Origin()
+
+        def __init__(self):
+            rows = int(12.0 / self.map_resolution)   # y in [-6, 6]
+            cols = int(26.0 / self.map_resolution)   # x in [-2, 24]
+            occ = np.zeros((rows, cols), bool)
+            # 2.6 m wide, 0.4 m deep box centered at (8, 0) — wider than the
+            # 3-seed expert's ~1.2 m ceiling.
+            x0, x1 = 7.8, 8.2
+            y0, y1 = -1.3, 1.3
+            c0 = int((x0 - self.map_origin.x) / self.map_resolution)
+            c1 = int((x1 - self.map_origin.x) / self.map_resolution)
+            r0 = int((y0 - self.map_origin.y) / self.map_resolution)
+            r1 = int((y1 - self.map_origin.y) / self.map_resolution)
+            occ[r0:r1, c0:c1] = True
+            self.esdf_map = (ndimage.distance_transform_edt(~occ)
+                             * self.map_resolution)
+
+    esdf = _MockESDF()
+    fe = HomotopyFrontEnd()
+    paths = fe.find_paths(esdf, np.array([0.0, 0.0]), np.array([16.0, 0.0]))
+    print(f"[self-test] classes found: {len(paths)} "
+          f"signatures: {[sig for _, sig in paths]}")
+    sides = {sig[0] for _, sig in paths if sig != ('free',)}
+    assert {+1, -1} <= sides, (
+        f"FAILED: expected both left (+1) and right (-1) classes, got {sides}")
+
+    class _MockPlanner:
+        init_wpts_num, v_max, T_min, T_max = 2, 1.0, 0.5, 5.0
+
+    seeds = fe.seeds_from_paths(paths, None, None, _MockPlanner())
+    for (w, t), (_, sig) in zip(seeds, paths):
+        print(f"[self-test] sig={sig} wpts=\n{np.round(w, 2)} ts={np.round(t, 2)}")
+    print("[self-test] OK — both homotopy classes recovered for a 2.6 m box.")
