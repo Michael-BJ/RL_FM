@@ -1137,3 +1137,231 @@ antisipasi vs ambiguitas label), atau
 (target tetap lurus -> ambiguitas aman; lebih sesuai klaim riset, tapi menyentuh
 cost+gradien MINCO).
 Fix v1.13 BARU divalidasi offline — belum diuji SITL.
+
+## INTEGRASI RL SEED GENERATOR — `use_rl_seeds` (2026-07-17)
+
+### Apa yang ditambahkan
+
+Policy SAC beku (`sac_v1_ft_side`, bimodal ~50% di gym) dipakai sebagai
+SEED GENERATOR dual-h di expert (Gazebo), menggantikan enumerasi A* saat
+berhasil — fallback otomatis ke `batch_plan` lama (topo/3-seed) saat gagal:
+
+1. **File baru di paket** (dicopy dari `~/rl_gym_v1.0/rl_gym/`):
+   `neo_planner/rl_seed_adapter.py` + `neo_planner/policy_export_ft_side.pt`
+   (2,8 MB TorchScript; live via symlink build, TANPA rebuild).
+2. **`expert_planner_node.py`**: param `use_rl_seeds` (default **false** =
+   perilaku lama 100%) + `rl_policy_path`; helper `_try_rl_seed_plan()` —
+   2 seed (h=-1/h=+1) dioptimasi 1x `plan_once` per seed TANPA retry
+   perturbasi (retry `warm_start_plan` mengganti seed dgn generik, merusak
+   struktur dual-h); semua yang konvergen -> `all_solutions` (format sama
+   `batch_plan`, jadi pipeline mode_sig/dedup/safety TIDAK berubah);
+   termurah dieksekusi. Hook di `_replan_and_record()` sebelum `batch_plan`;
+   log replan dapat tag ` RL`; ringkasan akhir mencetak `RL seeds : ok/try`.
+3. **`expert_planning.launch.py`**: argumen `use_rl_seeds` diteruskan.
+
+Cara pakai (world lain: ganti pcd+goal seperti biasa):
+```bash
+ros2 launch neo_planner expert_planning.launch.py \
+    pcd_path:=$HOME/neo_planner_ws/src/worlds/training_worlds/poles_wide.pcd \
+    goal_x:=20.0 target_samples:=200 use_rl_seeds:=true
+```
+
+### Hasil verifikasi
+
+- **Offline** (MinJerkPlanner ASLI + mock ESDF box ala poles_wide, 60 scene;
+  skrip scratchpad `verify_rl_seeds_offline.py`): 88% seed konvergen, 100%
+  scene >=1 seed (tanpa fallback), 48% scene bimodal murni (2 sig beda),
+  ~67 ms/replan total (inferensi policy 1,8 ms).
+- **SITL poles_wide trial #1**: 38 sampel lalu PHYSICS EXPLOSION — TAPI
+  signature-nya pola LAMA yang terdokumentasi (leg pulang, drone hanyut ke
+  tepi arena y~5, stuck, escape ping-pong 3x ganti arah <5 s), bukan crash
+  menerbangkan trajektori RL langsung.
+- **SITL poles_wide trial #2**: **SELESAI 200/200 sampel, 0 explosion**,
+  14 escape (transien, selalu recover), accept rate 81,6%, lag 16 ms.
+  `RL seeds: 136/305 replan konvergen (45%), 53 dual-h (17%)`; waktu replan
+  RL ~164 ms vs fallback ~278 ms (sampel log; enumerasi topo penuh
+  historis 240-960 ms). Dataset `run_20260717_210804`: 200 baris/179 scene,
+  **11,7% scene bimodal murni** (vs 4-6% baseline v1.5/v1.7 box_narrow —
+  world beda, jangan dibandingkan 1:1), sisi seimbang (+1: 49 vs -1: 66),
+  unimodal-nonfree 39,7%.
+
+### Catatan & sisa masalah (BELUM dikerjakan)
+
+- **Jalur RL mem-bypass anchor continuity v1.13 dan enumerasi topo** saat
+  seed RL konvergen -> tidak ada seed lanjutan antar-replan; dugaan
+  penyumbang escape lebih sering (14/run vs biasanya lebih rendah di world
+  mudah). Kalau mau digabung: tawarkan `frontend.anchor_seed` juga di jalur
+  RL, atau pakai RL hanya sebagai seed TAMBAHAN di `topo_batch_plan`.
+- **Konvergensi seed RL di penerbangan nyata cuma 45%** (offline 88%) —
+  scene nyata lebih beragam (multi-obstacle, dinding arena virtual, head
+  velocity/target ter-clamp). 55% replan tetap jatuh ke fallback lama
+  (aman, tapi manfaat kecepatan hilang di situ).
+- **Mask unknown**: `build_crop_from_esdf` menganggap semua cell teramati
+  (octomap -1 tidak diteruskan) — probe gym menunjukkan ini melemahkan
+  pemecahan sisi oleh h. Kalau seed dual-h sering satu sisi, ini penyebab
+  utamanya.
+- Model masih rezim sensor gym 88°/6 m — fine-tune adaptasi Gemini 2
+  disarankan sebelum koleksi dataset serius (keputusan lama, ditunda).
+- Revert: cukup JANGAN set `use_rl_seeds:=true` (default false); tidak ada
+  perubahan perilaku lain.
+
+## DIAGNOSA + FIX: escape-spin di G4 gauntlet_train2 — sy 7.6 -> revert 5.6 (2026-07-20)
+
+### Gejala (dilaporkan user)
+
+Saat collecting normal (topo frontend, TANPA RL seeds), drone kadang tidak
+menabrak/dianggap gagal lewat karena dimensi, melainkan **escape aktif
+berulang dan drone berputar-putar di depan obstacle tanpa pernah
+melewatinya** — bukan macet permanen (butuh detik-menit), tapi sangat lama
+dan tidak produktif untuk collecting.
+
+### Diagnosa (SITL, `use_rl_seeds:=false`, gauntlet_train2, 400 sampel)
+
+Direproduksi dengan telemetri jelas: pada satu episode, `samples` counter
+**diam di 350 selama >40 detik** sementara posisi bolak-balik x=[13,1-15,6]
+di depan **G4** (dinding tanpa pintu, x=16,5) — 5 siklus
+`Replan failed (budget) -> ESCAPE -> mundur/maju sedikit -> gagal lagi`,
+y hanyut perlahan dari +2,7 turun ke -0,4 sebelum akhirnya (setelah ~90
+detik total) kebetulan hanyut cukup jauh untuk menemukan celah bawah.
+Run selesai 400/400 (0 explosion) tapi `Topo fallback: 455 total` —
+rasio fallback/replan jauh lebih tinggi dari world lain (poles_wide:
+99/305).
+
+**Akar penyebab ditemukan di kode, bukan dugaan**: `generate_wide_worlds.py`
+G4 pernah diperpanjang `sy 5.6 -> 7.6` (+1 m tiap ujung, komentar sendiri:
+"atas permintaan") — perubahan ini TIDAK pernah masuk ke CLAUDE.md
+(dokumentasi jadi basi). Efeknya: celah atas yang tadinya 2,1 m menjadi
+**~1,1 m — di bawah lebar yang bisa dilewati drone sama sekali**. Dinding
+jadi efektif satu sisi (paksa bawah, celah 2,3 m), menuntut simpangan
+lateral **>3,5 m** dari sumbu tengah untuk memutar ujung bawah.
+
+Konteks tambahan yang memperjelas kenapa ini sulit untuk MEKANISME MANA
+PUN (bukan cuma bug spesifik): obstacle terlebar yang pernah dilatih ke
+policy RL (`sac_v1_ft_side`, gym `scene_generator.py` level>=3
+"wall_gauntlet regime") = **3,0 m**, dan plafon aksi lateral RL
+(`q_scale`) juga **3,0 m** — disetel pas kurikulum tersulit itu. G4 versi
+diperpanjang (>3,5 m) berada **di luar distribusi training** untuk kedua
+mekanisme (klasik maupun RL) — bukan bukti "RL/planner tidak bisa
+beradaptasi", melainkan geometri yang memang di luar apa pun yang pernah
+divalidasi. Prinsip yang sama seperti fix v1.13 ("student tidak mungkin
+lebih pintar dari teacher, perbaiki expert/world dulu") berlaku di sini.
+
+### Fix: revert G4 ke sy=5.6
+
+`generate_wide_worlds.py` GAUNTLET_TRAIN2 G4 dikembalikan ke geometri asli
+(`sy=5.6`, celah atas ~2,1 m / bawah ~3,3 m, keduanya feasible & dalam
+rentang q_scale 3,0 m). World diregenerasi
+(`python3 generate_wide_worlds.py`), `.sdf` dicopy ulang ke
+`~/PX4-Autopilot/Tools/simulation/gz/worlds/gauntlet_train2.sdf`.
+`audit_gauntlet_train2.py` **LULUS PENUH** pasca-revert: G4 kembali 2
+kelas homotopi (`sigs=[(-1,-1),(1,1)]`), pinch tersempit 1,90 m,
+passability @0,65 m dan @0,80 m terjaga di semua event.
+
+### Rekomendasi lanjutan
+
+Kalau di masa depan ingin sengaja menguji obstacle di luar kurikulum RL
+(>3,0 m / >q_scale), perlakukan sebagai stress-test eksplisit yang
+disadari (bukan default collecting), dan pertimbangkan perbesar horizon
+target lokal / escape bias khusus di titik itu dulu — bukan mengandalkan
+drone hanyut kebetulan lewat escape acak.
+
+## PERLUASAN scene_generator RL: level L4 "gauntlet-chain" (2026-07-20)
+
+### Motivasi (dari diagnosa OOD)
+
+Arena training RL (`~/rl_gym_v1.0/rl_gym/scene_generator.py`) SELAMA INI cuma
+L0-L3: koridor 20 m SATU ARAH (start kiri -> goal kanan), maksimal 1 obstacle
+lebar frontal (L3). Diagnosa kegagalan RL di gauntlet_train2 (lihat "area
+navigasi training RL" + head-to-head 2026-07-20): **78% escape (18/23) di leg
+PULANG** — arah yang tak pernah dilatih — dan crop 6.4 m sering memuat 2 event
+sekaligus (G1/G2/G3 berdekatan), konfigurasi di luar distribusi L0-L3. Model
+tidak rusak; arenanya terlalu sempit untuk deployment multi-event dua-arah.
+
+### Yang ditambahkan (scene_generator.py v1.1, train_sac.py)
+
+- **Level baru L4 "gauntlet-chain"** (`generate(level>=4)`): 3-4 EVENT
+  berantai (spasi ~4 m, beberapa masuk 1 crop) meniru gauntlet_train2.
+  Method baru `_add_event()` dengan 4 tipe: `wide_center` (G1/G4, bimodal
+  L/R), `wall_door` (G2, dinding+pintu ~2 m offset), `twin_gate` (G3,
+  sepasang tiang -> memutar), `offset_wide` (asimetris). >=1 event dijamin
+  `wide_center` (sinyal side-conditioning h selalu ada). Semua event
+  menyisakan celah lolos (obstacle tak melewati y=±3.5 -> koridor luar
+  selalu bebas, konsisten gauntlet_train2).
+- **DUA-ARAH**: L4 menukar start<->goal 50% (menutup kegagalan leg-pulang).
+  L0-L3 TETAP satu-arah, TIDAK diubah sama sekali.
+- `train_sac.py`: `--max-level` (default **4**) + diteruskan ke
+  `CurriculumTelemetryCallback` (dulu hardcoded 3). Kurikulum promosi
+  L0->L4 saat success-rate rolling >= 0.85.
+
+### Verifikasi (self-test `python3 scene_generator.py`)
+
+- L0-L3 tetap passable & tak berubah (perilaku lama utuh).
+- **L4 x200 seed: passable 200/200 (100% feasible via BFS konektivitas
+  edt>0.35), arah-terbalik 52% (dua-arah bekerja), 4.1 event/scene.**
+- Env integrasi: `DronePlannerEnv(level=4)` reset+step 12 episode dua-arah
+  tanpa error, bentuk observasi benar (crop 1x64x64, vec 8).
+- Denah contoh: `~/rl_gym_v1.0/rl_gym/l4_gauntlet_chain_layout.png`.
+
+### BELUM dikerjakan (keputusan retraining ada di user)
+
+- **Retrain SAC dengan L4** belum dijalankan (~1.3 jt step, berjam-jam).
+  Perintah: `python3 train_sac.py --run-name sac_v2_gauntlet --max-level 4`
+  (default sudah 4). Setelah itu re-ekspor policy (`rl_seed_adapter.py
+  --export runs/sac_v2_gauntlet/final.zip --out policy_export_v2.pt`) dan
+  ganti `policy_export_ft_side.pt` di paket bila mau dipakai expert.
+- Pilihan koridor: L4 dipertahankan 20 m (grid tak membesar -> L0-L3 tak
+  melambat). Kalau mau parity penuh 30 m/6-event: naikkan `x_max`,
+  `goal_xy`, `max_steps` — perubahan lebih besar, ditunda.
+- Belum ada bukti L4 memperbaiki hasil SITL: itu baru terjawab SETELAH
+  retrain + head-to-head ulang di gauntlet_train2/test01.
+
+## HASIL: policy RL v2 (L4 dua-arah) vs lama di gauntlet_train2 (2026-07-21)
+
+### Setup
+
+Retrain SAC L0->L4 (2 juta step, `~/rl_gym_v1.0/rl_gym/runs/sac_v2_gauntlet/`,
+final SR L4 ~0.77, side-consistency 0.89) di-ekspor ke
+`neo_planner/policy_export_v2.pt` (via `rl_seed_adapter.py --export`) dan
+diuji SITL di gauntlet_train2 (G4 sudah sy=5.6, use_rl_seeds:=true,
+rl_policy_path baru diteruskan lewat launch). Dataset v2:
+`run_20260721_171530`.
+
+### Head-to-head (400 sampel, n=1 masing-masing)
+
+| Metrik | Policy lama (ft_side) | Policy v2 (L4) |
+|---|---|---|
+| Accept rate | 80.6% | **84.9%** |
+| Escape total | 23 | **17** |
+| **Escape leg PULANG** | **18 (78%)** | **6 (35%)** |
+| Escape leg PERGI | 5 | 11 |
+| Keseimbangan sisi | 131:100 (skew) | **97:106 (seimbang)** |
+| Bimodal murni | 10.2% | 6.7% |
+| Konvergensi seed RL | ~46% | 39% |
+| Explosion | 0 | 0 |
+
+### Temuan
+
+Kegagalan leg-PULANG (cacat yang ditargetkan training dua-arah L4) turun
+tajam **18 -> 6 (78% -> 35%)**. Pola escape yang dulu timpang (5 pergi : 18
+pulang) kini merata (11 : 6) — "titik buta arah pulang" hilang. Total escape
+turun, accept naik, keseimbangan sisi dataset membaik (konsisten
+side-consistency 0.90 saat training). Ini SEARAH prediksi riset: melatih RL
+di arena kompleks dua-arah mengurangi kegagalan yang dulu muncul karena
+policy tak pernah melihat arah pulang.
+
+### Caveat (jangan overclaim)
+
+- **n=1 vs n=1**, closed-loop STOKASTIK. Log policy lama sudah terhapus
+  (angka lama dari analisis terdokumentasi sesi ini, bukan re-run). Klaim
+  kokoh butuh >=5 trial/policy + uji signifikansi.
+- Metrik sekunder JUSTRU turun: bimodal murni (6.7% vs 10.2%) & konvergensi
+  seed RL (39% vs 46%). Bukan menang di semua lini — menang di yang dituju
+  (leg pulang, keseimbangan sisi), campur di lainnya.
+- Escape leg-pergi naik (5->11) — total membaik semata dari leg pulang.
+
+### Sisa (belum dikerjakan)
+
+- Multi-trial (>=5) v2 + baseline lama untuk signifikansi statistik.
+- Evaluasi lintas-level L0-L4 policy v2 (cek forgetting scene mudah) — BELUM.
+- Uji held-out (test01/wide_test) untuk klaim generalisasi, bukan cuma
+  training world gauntlet_train2.

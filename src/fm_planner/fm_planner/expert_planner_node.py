@@ -150,6 +150,27 @@ TRAJ_MIN_ESDF     = 0.3   # FIX: 0.2 -> 0.3 (now measured from the drone BODY, s
 TRAJ_CHECK_POINTS = 10
 SAMPLE_MAX_SPEED  = 3.0
 
+
+def default_rl_policy_path(fname="policy_export_v2.pt"):
+    """Resolve the shipped RL policy under model/rl/.
+
+    Robust to both build modes: prefer the installed share dir (populated by
+    a copy OR symlink build), then fall back to the in-source tree
+    (<pkg>/model/rl/) when running unbuilt. Returns the path even if it does
+    not exist yet, so the parameter still has a sensible default.
+    """
+    try:
+        from ament_index_python.packages import get_package_share_directory
+        p = os.path.join(get_package_share_directory("fm_planner"),
+                         "model", "rl", fname)
+        if os.path.isfile(p):
+            return p
+    except Exception:
+        pass
+    # source-tree fallback: .../fm_planner/fm_planner/ -> .../fm_planner/model/rl/
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "..", "model", "rl", fname)
+
 # ── FIX ALTITUDE: GPS-AGL cruise trim ────────────────────────────────────────
 # Problem: cruise_z is set ONCE in the local EKF frame, then held forever.
 # The SITL barometer drifts -> the EKF Z reference drifts with it -> the drone
@@ -449,6 +470,31 @@ class ExpertPlannerNode(Node):
                         "[Expert] Lap-alternation PILOT active — 3 legs: "
                         "left -> right -> free, then stop (instead of target_samples). "
                         f"Leg 1/3: forced_sign={self._lap_phases[0]} (left)")
+
+        # ── RL seed generator (2026-07-17) ───────────────────────────────────
+        # use_rl_seeds=true: on every replan, 2 dual-h seeds (h=-1 / h=+1,
+        # structural side) from the frozen SAC policy (rl_seed_adapter.py) are
+        # tried FIRST; every converged one enters all_solutions (dataset bimodal
+        # by construction, mode_sig dedup still works). If none converges ->
+        # fall back to the old batch_plan (topo/3-seed) — existing behavior is
+        # unchanged. Default false = no RL at all.
+        # rl_policy_path default = policy_export_v2.pt (L4 bidirectional policy,
+        # 2026-07-21) — the current best; the older policy_export_ft_side.pt is
+        # also shipped and can be selected via rl_policy_path.
+        self.declare_parameter("use_rl_seeds", False)
+        self.declare_parameter("rl_policy_path", default_rl_policy_path())
+        self._rl_seeds = None
+        self._rl_try_count  = 0   # replans that attempted an RL seed
+        self._rl_ok_count   = 0   # replans where >=1 RL seed converged
+        self._rl_dual_count = 0   # replans where BOTH RL seeds converged
+        if bool(self.get_parameter("use_rl_seeds").value):
+            from rl_seed_adapter import RLSeedAdapter
+            _rl_path = str(self.get_parameter("rl_policy_path").value)
+            self._rl_seeds = RLSeedAdapter(
+                _rl_path, v_max=self._v_max,
+                T_min=0.5, T_max=5.0, M=3)
+            self.get_logger().info(
+                f"[Expert] RL seed generator ACTIVE — policy: {_rl_path}")
 
         # ── ESDF ──────────────────────────────────────────────────────────────
         # inflation_radius = drone body radius (x500 ≈ 0.25m). Obstacles are
@@ -1827,6 +1873,56 @@ class ExpertPlannerNode(Node):
 
         self._n_samples += len(solutions)
 
+    # ── RL seed plan ────────────────────────────────────────────────────────────
+    def _try_rl_seed_plan(self, head_state, tail_state):
+        """Try the 2 dual-h RL seeds (left/right) BEFORE the old batch_plan.
+
+        Each seed is optimized with a single plan_once (NO random-perturbation
+        retry — warm_start_plan's retry replaces the seed with a generic one and
+        breaks the dual-h structure). Every converged one enters all_solutions
+        with the same format as batch_plan, so the multimodal recording pipeline
+        (mode_sig dedup + _check_trajectory_safe) works unchanged; the cheapest
+        becomes the executed solution. Returns True if >=1 seed converged;
+        False -> the caller falls back to batch_plan (safe fallback).
+        """
+        try:
+            seeds = self._rl_seeds.get_seeds(
+                self._esdf, head_state[0], head_state[1],
+                self._target_state[0], goal=self._global_target)
+        except Exception as ex:
+            self.get_logger().warn(
+                f"[Expert] RL seed inference failed: {ex}",
+                throttle_duration_sec=5.0)
+            return False
+
+        self._rl_try_count += 1
+        solutions = []
+        best = None
+        for int_wpts, ts in seeds:
+            try:
+                self._planner.read_planning_conditions(
+                    self._esdf, head_state, tail_state, int_wpts, ts)
+                self._planner.plan_once()
+                cost = float(self._planner.weighted_cost.sum())
+                sol = (self._planner.int_wpts.copy(),
+                       self._planner.ts.copy(), cost)
+                solutions.append(sol)
+                if best is None or cost < best[2]:
+                    best = sol
+            except Exception:
+                continue
+
+        if best is None:
+            return False
+        self._planner.all_solutions = solutions
+        self._planner.int_wpts   = best[0].copy()
+        self._planner.ts         = best[1].copy()
+        self._planner.final_cost = best[2]
+        self._rl_ok_count += 1
+        if len(solutions) == 2:
+            self._rl_dual_count += 1
+        return True
+
     # ── Replan + record ───────────────────────────────────────────────────────
     def _replan_and_record(self):
         if not self._esdf.is_ready():
@@ -1923,13 +2019,21 @@ class ExpertPlannerNode(Node):
 
                 try:
                     t0 = time.time()
-                    self._planner.batch_plan(self._esdf, head_state, tail_state)
+                    # RL seeds first (if enabled); fall back to batch_plan when
+                    # no RL seed converges. Default (no RL) -> batch_plan only.
+                    used_rl = (self._rl_seeds is not None
+                               and self._try_rl_seed_plan(head_state,
+                                                          tail_state))
+                    if not used_rl:
+                        self._planner.batch_plan(
+                            self._esdf, head_state, tail_state)
                     dt = time.time() - t0
+                    rl_tag    = " RL" if used_rl else ""
                     short_tag = " short" if use_shorter else ""
                     emer_tag  = f" sd={safe_dis_dyn:.2f}" if use_emergency_safe else ""
                     self.get_logger().info(
                         f"[Expert] Replan ✓ cost={self._planner.final_cost:.1f} "
-                        f"t={dt*1000:.0f}ms seed={seed}{short_tag}{emer_tag}",
+                        f"t={dt*1000:.0f}ms seed={seed}{rl_tag}{short_tag}{emer_tag}",
                         throttle_duration_sec=1.0)
                     ok = True
                     break
@@ -2512,6 +2616,11 @@ class ExpertPlannerNode(Node):
             fbf = getattr(fe, "fallback_forced_count", 0)
             self.get_logger().info(
                 f"  Topo fallback      : {fb} total ({fbf} during forced legs)")
+        if self._rl_seeds is not None and self._rl_try_count > 0:
+            self.get_logger().info(
+                f"  RL seeds           : {self._rl_ok_count}/"
+                f"{self._rl_try_count} replans converged "
+                f"({self._rl_dual_count} dual-h/both sides)")
         self.get_logger().info("=" * 62)
 
         if rclpy.ok():

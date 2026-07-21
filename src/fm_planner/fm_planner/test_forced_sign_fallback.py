@@ -2,8 +2,7 @@ import logging, sys, os
 import numpy as np
 from scipy import ndimage
 
-sys.path.insert(0, os.path.expanduser(
-    '~/neo_planner_ws/src/fm_planner/fm_planner'))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import homotopy_frontend as H
 
 logging.basicConfig(level=logging.INFO, format='%(levelname)s %(message)s')

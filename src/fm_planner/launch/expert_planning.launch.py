@@ -46,6 +46,8 @@ def generate_data_save_dir(context):
     plan_continuity = LaunchConfiguration("use_plan_continuity").perform(context)
     force_lap_alt   = LaunchConfiguration("force_lap_alternation").perform(context)
     lap_loop        = LaunchConfiguration("lap_alternation_loop").perform(context)
+    use_rl_seeds    = LaunchConfiguration("use_rl_seeds").perform(context)
+    rl_policy_path  = LaunchConfiguration("rl_policy_path").perform(context)
     arena_y_min     = LaunchConfiguration("arena_y_min").perform(context)
     arena_y_max     = LaunchConfiguration("arena_y_max").perform(context)
     arena_x_min     = LaunchConfiguration("arena_x_min").perform(context)
@@ -77,6 +79,9 @@ def generate_data_save_dir(context):
             "use_plan_continuity": plan_continuity.lower() in ("true", "1", "yes"),
             "force_lap_alternation": force_lap_alt.lower() in ("true", "1", "yes"),
             "lap_alternation_loop": lap_loop.lower() in ("true", "1", "yes"),
+            "use_rl_seeds":   use_rl_seeds.lower() in ("true", "1", "yes"),
+            **({"rl_policy_path": os.path.expanduser(rl_policy_path)}
+               if rl_policy_path else {}),
             "arena_x_min":    float(arena_x_min),
             "arena_x_max":    float(arena_x_max),
             "arena_y_min":    float(arena_y_min),
@@ -169,6 +174,21 @@ def generate_launch_description():
             "cycle until target_samples (collecting VOLUME with balanced "
             "left/right sides). Requires force_lap_alternation=true. "
             "Default false = 3-leg pilot (old behavior)."))
+
+    use_rl_seeds_arg = DeclareLaunchArgument(
+        "use_rl_seeds", default_value="false",
+        description=(
+            "true = MINCO seeds come from the dual-h SAC policy "
+            "(rl_seed_adapter.py + policy_export_v2.pt) tried first on every "
+            "replan; falls back to the old batch_plan when they fail. "
+            "Default false = old behavior without RL."))
+
+    rl_policy_path_arg = DeclareLaunchArgument(
+        "rl_policy_path", default_value="",
+        description=(
+            "Path to the TorchScript RL policy .pt. Empty = node default "
+            "(policy_export_v2.pt, the L4 bidirectional policy). For the older "
+            "policy use policy_export_ft_side.pt."))
 
     # Arena boundary — limit the drone navigation area so it does not stray too far.
     # The local target is always clamped within these bounds + lateral_step.
@@ -271,6 +291,8 @@ def generate_launch_description():
         use_plan_continuity_arg,
         force_lap_alternation_arg,
         lap_alternation_loop_arg,
+        use_rl_seeds_arg,
+        rl_policy_path_arg,
         arena_x_min_arg,
         arena_x_max_arg,
         arena_y_min_arg,

@@ -1,3 +1,5 @@
+from glob import glob
+
 from setuptools import find_packages, setup
 
 package_name = 'fm_planner'
@@ -10,6 +12,9 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
+        # Frozen RL policies (expert_planner_node resolves the default from
+        # share/fm_planner/model/rl/ via default_rl_policy_path()).
+        ('share/' + package_name + '/model/rl', glob('model/rl/*.pt')),
         ('share/' + package_name + '/launch', [
             'launch/sitl.launch.py',
             'launch/mavros_only.launch.py',
