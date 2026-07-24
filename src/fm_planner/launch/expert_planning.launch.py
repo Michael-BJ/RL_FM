@@ -48,10 +48,13 @@ def generate_data_save_dir(context):
     lap_loop        = LaunchConfiguration("lap_alternation_loop").perform(context)
     use_rl_seeds    = LaunchConfiguration("use_rl_seeds").perform(context)
     rl_policy_path  = LaunchConfiguration("rl_policy_path").perform(context)
+    use_escape      = LaunchConfiguration("use_escape").perform(context)
     arena_y_min     = LaunchConfiguration("arena_y_min").perform(context)
     arena_y_max     = LaunchConfiguration("arena_y_max").perform(context)
     arena_x_min     = LaunchConfiguration("arena_x_min").perform(context)
     arena_x_max     = LaunchConfiguration("arena_x_max").perform(context)
+    randomize_turn_y   = LaunchConfiguration("randomize_turnaround_y").perform(context)
+    turnaround_y_range = LaunchConfiguration("turnaround_y_range").perform(context)
 
     print("=" * 62)
     print(f"  Data collection folder: {path}")
@@ -82,10 +85,13 @@ def generate_data_save_dir(context):
             "use_rl_seeds":   use_rl_seeds.lower() in ("true", "1", "yes"),
             **({"rl_policy_path": os.path.expanduser(rl_policy_path)}
                if rl_policy_path else {}),
+            "use_escape":     use_escape.lower() in ("true", "1", "yes"),
             "arena_x_min":    float(arena_x_min),
             "arena_x_max":    float(arena_x_max),
             "arena_y_min":    float(arena_y_min),
             "arena_y_max":    float(arena_y_max),
+            "randomize_turnaround_y": randomize_turn_y.lower() in ("true", "1", "yes"),
+            "turnaround_y_range":     float(turnaround_y_range),
         }],
     )
 
@@ -123,13 +129,18 @@ def generate_launch_description():
         description="Maximum drone speed (m/s)")
 
     safe_dis_arg = DeclareLaunchArgument(
-        "safe_dis", default_value="0.5",
+        "safe_dis", default_value="0.65",
         description=(
-            "EXTRA safety margin outside the drone body (m). The drone body "
-            "(r~0.25m) is already counted via the ESDF inflation_radius, so this "
-            "is the extra body->pole distance. 0.5 = the drone passes >=0.5m from "
-            "a pole (smooth in poles); raise to 0.8 for an extra-wide margin, "
-            "lower to 0.35 for aggressive slalom / straighter paths."))
+            "SOFT-zone clearance measured FROM THE CENTER OF MASS (m) — 2026-07-24 "
+            "rewrite. Previously this was a body-EDGE margin with a hidden +0.30m "
+            "body radius you had to add mentally; now it is the actual center->"
+            "obstacle distance where the soft collision penalty begins. Default "
+            "0.65m at rest, +K_SPEED_MARGIN*|v| -> ~0.90m at cruise 1.0 m/s "
+            "(= the pre-rewrite effective clearance; a tighter 0.55m set caused a "
+            "graze->explosion in a 2.0m corridor and was reverted). The hard "
+            "barrier (0.60m center) and post-check reject line (0.55m center) are "
+            "set in expert_planner_node.py (HARD_DIS_CENTER / POST_CHECK_CLEAR_MIN). "
+            "EXPERT-ONLY: the ESDF, A* frontend and inference nodes are unchanged."))
 
     use_ekf_stable_arg = DeclareLaunchArgument(
         "use_ekf_stable", default_value="true",
@@ -176,12 +187,12 @@ def generate_launch_description():
             "Default false = 3-leg pilot (old behavior)."))
 
     use_rl_seeds_arg = DeclareLaunchArgument(
-        "use_rl_seeds", default_value="false",
+        "use_rl_seeds", default_value="true",
         description=(
-            "true = MINCO seeds come from the dual-h SAC policy "
-            "(rl_seed_adapter.py + policy_export_v2.pt) tried first on every "
-            "replan; falls back to the old batch_plan when they fail. "
-            "Default false = old behavior without RL."))
+            "true (DEFAULT since 2026-07-24, user request) = MINCO seeds come "
+            "from the dual-h SAC policy (rl_seed_adapter.py + policy_export_v2.pt) "
+            "tried first on every replan; falls back to the old batch_plan when "
+            "they fail. Set false for the classic topo/3-seed frontend only."))
 
     rl_policy_path_arg = DeclareLaunchArgument(
         "rl_policy_path", default_value="",
@@ -189,6 +200,16 @@ def generate_launch_description():
             "Path to the TorchScript RL policy .pt. Empty = node default "
             "(policy_export_v2.pt, the L4 bidirectional policy). For the older "
             "policy use policy_export_ft_side.pt."))
+
+    use_escape_arg = DeclareLaunchArgument(
+        "use_escape", default_value="false",
+        description=(
+            "false (default, 2026-07-23) = the scripted escape maneuver "
+            "(canned velocity away from the obstacle) is disabled; a stuck/"
+            "failed replan just resets bookkeeping and forces a fresh replan "
+            "attempt instead of taking over velocity control. true = old "
+            "behavior (escape maneuver on repeated replan failure/stuck/"
+            "emergency-stop)."))
 
     # Arena boundary — limit the drone navigation area so it does not stray too far.
     # The local target is always clamped within these bounds + lateral_step.
@@ -205,6 +226,23 @@ def generate_launch_description():
     arena_y_max_arg = DeclareLaunchArgument(
         "arena_y_max", default_value="6.0",
         description="Maximum Y bound of the navigation arena (m) — poles default +6")
+
+    randomize_turnaround_y_arg = DeclareLaunchArgument(
+        "randomize_turnaround_y", default_value="false",
+        description=(
+            "true = chain the turnaround endpoints instead of bouncing "
+            "between two fixed points: every time the drone reaches a "
+            "turnaround, the Y coordinate of the NEXT target is redrawn "
+            "randomly (uniform in +-turnaround_y_range), so leg N+1's "
+            "target is never leg N-1's point (A->B->C->D..., not "
+            "A->B->A->B). X still alternates between 0 and goal_x. "
+            "Default false = old bounce behavior (0,0)<->(goal_x,0)."))
+    turnaround_y_range_arg = DeclareLaunchArgument(
+        "turnaround_y_range", default_value="2.0",
+        description=(
+            "Half-width (m) of the uniform random draw for the turnaround "
+            "Y coordinate when randomize_turnaround_y=true. Clamped to stay "
+            ">=1.0m inside arena_y_min/max."))
 
     # Occupancy band — ADJUST to the world:
     #   poles  : occ_min_z=1.0  occ_max_z=3.0  (short obstacle=3.36m, drone=1.5m)
@@ -251,7 +289,9 @@ def generate_launch_description():
             # obstacle boundaries.
             "resolution":        0.1,
             "publish_2d_map":    True,
-            "publish_3d_map":    False,
+            # True -> also publish the 3D octomap voxel markers
+            # (/occupied_cells_vis_array, rainbow by height) for RViz.
+            "publish_3d_map":    True,
             # FIX: LaunchConfiguration produces a STRING-typed parameter, whereas
             # octomap_server declares a double. Without ParameterValue(
             # value_type=float), the occupancy band could be REJECTED / not
@@ -293,10 +333,13 @@ def generate_launch_description():
         lap_alternation_loop_arg,
         use_rl_seeds_arg,
         rl_policy_path_arg,
+        use_escape_arg,
         arena_x_min_arg,
         arena_x_max_arg,
         arena_y_min_arg,
         arena_y_max_arg,
+        randomize_turnaround_y_arg,
+        turnaround_y_range_arg,
         occ_min_z_arg,
         occ_max_z_arg,
         data_save_dir_arg,

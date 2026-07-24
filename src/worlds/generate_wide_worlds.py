@@ -62,7 +62,10 @@ OUT_DIR = os.path.dirname(os.path.abspath(__file__))
 # HELD-OUT (wide_test, wall_gauntlet, test01) TETAP di sini -- jangan
 # dipindah, folder training_worlds/ hanya untuk world yang aman dikumpulkan.
 TRAIN_OUT_DIR = os.path.join(OUT_DIR, "training_worlds")
-TRAINING_WORLD_NAMES = {"poles_wide", "gauntlet_train", "gauntlet_train2"}
+# 2026-07-21: konsolidasi — hanya gauntlet_train, gauntlet_train2, dan maze_train
+# (world lain dihapus atas permintaan user). Ketiganya world TRAINING.
+TRAINING_WORLD_NAMES = {"gauntlet_train", "gauntlet_train2",
+                        "gauntlet_train3", "maze_train"}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -596,6 +599,77 @@ SDF_FOOTER = """
 """
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# GAUNTLET_TRAIN3 (2026-07-21) — varian gauntlet ke-3 untuk TRAINING
+#   Sama-jenis dengan gauntlet_train (deret event ambigu), TAPI:
+#   - SEMUA 6 event BIMODAL (kiri/kanan) — beda kompleksitas: gauntlet_train
+#     punya 1 event threading (R6 slalom); di sini NOL threading -> sinyal
+#     multimodal (2 jawaban valid per scene) semaksimal mungkin, persis yang
+#     dibutuhkan riset FM (maze_train ditolak justru karena mayoritas 1-jawaban).
+#   - Posisi & lebar BERBEDA dari gauntlet_train/2; menonjolkan obstacle BULAT
+#     (silinder gemuk) sebagai penghalang tengah (H2 d=2.0, H6 d=2.4).
+#   SEMUA celah >= 2.0 m. Koridor 0..30 -> WAJIB goal_x:=30 arena_x_max:=33.
+#   Audit: training_worlds/audit_gauntlet_train3.py
+GAUNTLET_TRAIN3 = [
+    # H1 x=4 — box tengah 2.2 (span +-1.1) + tiang +-3.5 -> celah L/R 2.0
+    dict(type="box", x=4.0,  y=0.0,   sx=0.5, sy=2.2, h=3.6),
+    dict(type="cyl", x=4.0,  y=3.5,   r=0.4, h=3.9),
+    dict(type="cyl", x=4.0,  y=-3.5,  r=0.4, h=3.9),
+    # H2 x=9 — silinder gemuk d=2.0 (BULAT) di tengah + tiang +-3.7 -> L/R 2.3
+    dict(type="cyl", x=9.0,  y=0.0,   r=1.0, h=3.6),
+    dict(type="cyl", x=9.0,  y=3.7,   r=0.4, h=3.9),
+    dict(type="cyl", x=9.0,  y=-3.7,  r=0.4, h=3.9),
+    # H3 x=13.5 — dinding y=[-4,4] + PINTU 2.2 off-axis y=-1.4 (bimodal: pintu / memutar)
+    dict(type="box", x=13.5, y=1.85,  sx=0.4, sy=4.3, h=3.6),   # blok y=[-0.3,4]
+    dict(type="box", x=13.5, y=-3.25, sx=0.4, sy=1.5, h=3.6),   # blok y=[-4,-2.5]
+    # H4 x=18 — dinding SOLID 4.6 (span +-2.3) tanpa pintu -> memutar salah satu ujung
+    dict(type="box", x=18.0, y=0.0,   sx=0.4, sy=4.6, h=3.6),
+    # H5 x=22.5 — box tengah 3.0 (lebih lebar, span +-1.5) + tiang +-4.0 -> L/R 2.1
+    dict(type="box", x=22.5, y=0.0,   sx=0.5, sy=3.0, h=3.6),
+    dict(type="cyl", x=22.5, y=4.0,   r=0.4, h=3.9),
+    dict(type="cyl", x=22.5, y=-4.0,  r=0.4, h=3.9),
+    # H6 x=27 — silinder gemuk d=2.4 (BULAT besar) + tiang +-4.2 -> L/R 2.6
+    dict(type="cyl", x=27.0, y=0.0,   r=1.2, h=3.6),
+    dict(type="cyl", x=27.0, y=4.2,   r=0.4, h=3.9),
+    dict(type="cyl", x=27.0, y=-4.2,  r=0.4, h=3.9),
+]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MAZE_TRAIN (2026-07-21) — world TRAINING berbentuk MAZE (labirin berliku)
+#   Beda dari gauntlet (deret event terpisah): ini KORIDOR MENGANYAM — deretan
+#   pintu ber-offset yang berselang-seling (atas/bawah) memaksa drone meliuk
+#   terus-menerus seperti menyusuri lorong labirin, disisipi 2 titik pilihan
+#   bimodal (kiri/kanan). SEMUA celah >= 2.2 m (di atas target 1.8 m), jarak
+#   antar-event 4 m. Koridor 0..30 -> WAJIB goal_x:=30 arena_x_max:=33
+#   (amplop sama dengan gauntlet_train). Audit: training_worlds/audit_maze_train.py.
+MAZE_TRAIN = [
+    # D1 x=4 — pintu 2.2 m di y=+1.6 (anyam ke ATAS): dua box sisakan celah
+    dict(type="box", x=4.0,  y=-2.75, sx=0.3, sy=6.5, h=3.6),   # blok y<+0.5
+    dict(type="box", x=4.0,  y=4.35,  sx=0.3, sy=3.3, h=3.6),   # blok y>+2.7
+    # D2 x=8 — pintu 2.2 m di y=-1.6 (anyam ke BAWAH)
+    dict(type="box", x=8.0,  y=-4.35, sx=0.3, sy=3.3, h=3.6),   # blok y<-2.7
+    dict(type="box", x=8.0,  y=2.75,  sx=0.3, sy=6.5, h=3.6),   # blok y>-0.5
+    # C1 x=12 — BIMODAL: box lebar 2.8 (span +-1.4) + tiang +-4.0 -> celah L/R 2.2
+    dict(type="box", x=12.0, y=0.0,   sx=0.4, sy=2.8, h=3.6),
+    dict(type="cyl", x=12.0, y=4.0,   r=0.4, h=3.9),
+    dict(type="cyl", x=12.0, y=-4.0,  r=0.4, h=3.9),
+    # D3 x=16 — pintu 2.2 m di y=+1.6 (anyam ke ATAS)
+    dict(type="box", x=16.0, y=-2.75, sx=0.3, sy=6.5, h=3.6),
+    dict(type="box", x=16.0, y=4.35,  sx=0.3, sy=3.3, h=3.6),
+    # D4 x=20 — pintu 2.2 m di y=-1.6 (anyam ke BAWAH)
+    dict(type="box", x=20.0, y=-4.35, sx=0.3, sy=3.3, h=3.6),
+    dict(type="box", x=20.0, y=2.75,  sx=0.3, sy=6.5, h=3.6),
+    # C2 x=24 — BIMODAL: box lebar 3.2 (span +-1.6) + tiang +-4.2 -> celah L/R 2.2
+    dict(type="box", x=24.0, y=0.0,   sx=0.4, sy=3.2, h=3.6),
+    dict(type="cyl", x=24.0, y=4.2,   r=0.4, h=3.9),
+    dict(type="cyl", x=24.0, y=-4.2,  r=0.4, h=3.9),
+    # D5 x=28 — pintu 2.2 m di y=+1.6 (anyam ke ATAS, terakhir sebelum goal)
+    dict(type="box", x=28.0, y=-2.75, sx=0.3, sy=6.5, h=3.6),
+    dict(type="box", x=28.0, y=4.35,  sx=0.3, sy=3.3, h=3.6),
+]
+
+
 def write_sdf(name, obstacles, path):
     parts = [SDF_HEADER.format(name=name)]
     n_box = n_cyl = 0
@@ -668,14 +742,13 @@ def write_pcd(obstacles, path):
 
 
 def main():
-    for name, obstacles in [("poles_wide", POLES_WIDE),
-                            ("wide_test", WIDE_TEST),
-                            ("wall_gauntlet", WALL_GAUNTLET),
-                            ("gauntlet_train", GAUNTLET_TRAIN),
-                            ("test01", TEST01),
+    # 2026-07-21: hanya 3 world tersisa (gauntlet_train, gauntlet_train2,
+    # maze_train). Definisi world lama (POLES_WIDE/WIDE_TEST/.../MAZE1) sengaja
+    # DIBIARKAN di file ini sebagai referensi, tapi TIDAK digenerasi lagi.
+    for name, obstacles in [("gauntlet_train", GAUNTLET_TRAIN),
                             ("gauntlet_train2", GAUNTLET_TRAIN2),
-                            ("decisive_gap", DECISIVE_GAP),
-                            ("maze1", MAZE1)]:
+                            ("gauntlet_train3", GAUNTLET_TRAIN3),
+                            ("maze_train", MAZE_TRAIN)]:
         out_dir = TRAIN_OUT_DIR if name in TRAINING_WORLD_NAMES else OUT_DIR
         write_sdf(name, obstacles, os.path.join(out_dir, f"{name}.sdf"))
         write_pcd(obstacles, os.path.join(out_dir, f"{name}.pcd"))

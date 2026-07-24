@@ -39,7 +39,8 @@ from rclpy.node import Node
 from rclpy.qos import (
     DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy,
 )
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, Point
+from visualization_msgs.msg import Marker, MarkerArray
 from mavros_msgs.msg import PositionTarget
 from mavros_msgs.srv import CommandBool, SetMode, ParamSetV2
 from rcl_interfaces.msg import ParameterValue as RclParameterValue
@@ -54,7 +55,8 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)
 from esdf_ros2 import ESDF
 from min_jerk_planner import MinJerkPlanner, PlannerConfig
-from homotopy_frontend import compute_mode_signature, mode_signature_to_str
+from homotopy_frontend import (
+    CONTINUITY_COST_FACTOR, compute_mode_signature, mode_signature_to_str)
 
 DISCONTINUITY_THRESHOLD  = 3.0
 
@@ -88,18 +90,61 @@ ESCAPE_PROBE_DIST  = 1.5
 ESCAPE_EXIT_DIST   = 1.2
 ESCAPE_MAX_TIME    = 15.0
 
+# ── SAFETY DISTANCES — MEASURED FROM THE CENTER OF MASS (2026-07-24 rewrite) ──
+# Before this rewrite, safe_dis/hard_dis were compared directly against
+# get_edt_dis, which — because the ESDF inflates obstacles by the body radius —
+# is the distance from the drone BODY EDGE, not its center. So every safety
+# number carried a HIDDEN +0.30 m you had to add mentally to reason about actual
+# clearance (comments even did this; the code never did). Confusing and
+# error-prone.
+#
+# Now: ALL safe_dis/hard_dis constants below are expressed FROM THE CENTER OF
+# MASS. The one physical fact that connects the two frames is BODY_RADIUS_M —
+# the real ESDF inflation (0.25 m nominal rounds UP to ceil(0.25/0.1)=3 cells =
+# 0.30 m at 0.1 m octomap resolution). Conversion, applied at exactly the points
+# where we compare against the raw ESDF:
+#       clearance_from_center = get_edt_dis(pt) + BODY_RADIUS_M
+#       edge_threshold        = center_threshold - BODY_RADIUS_M   (fed to MINCO)
+# This is EXPERT-ONLY: the ESDF itself, the homotopy A* frontend (its
+# HARD_CLEARANCE/BLOCK_THRESH are calibrated on the inflated grid), has_collision,
+# and the inference nodes are all left untouched — only how the expert INTERPRETS
+# and sets its own thresholds changes.
+BODY_RADIUS_M      = 0.30   # effective body radius = real ESDF inflation (see above)
+
+# Two-tier collision model, now stated from the CENTER OF MASS:
+#   clearance >= safe_dis_center            -> free (cost 0)
+#   hard_dis_center <= clr < safe_dis_center-> soft cubic penalty (may enter, agile)
+#   clearance <  hard_dis_center            -> hard barrier (nearly impenetrable)
+# Values chosen 2026-07-24 to MATCH the pre-rewrite EFFECTIVE clearances exactly
+# (hard 0.30 body-edge = 0.60 from center; soft 0.35 body-edge = 0.65 from center).
+# A tighter set (hard 0.50 / soft 0.55 from center) was tried first — it let the
+# drone graze to only 0.14 m body-edge in the R3 lower corridor (tracking error
+# ate the reduced buffer) -> physics explosion. Reverted to the conservative
+# clearance (this run's decision), KEEPING the center-of-mass semantics + the
+# decoupled post-check (both worked: no reject-loops observed). ~0.35 m of
+# tracking buffer beyond the physical body at the hard barrier.
+HARD_DIS_CENTER    = 0.60   # m from center -> hard barrier (= old 0.30 body-edge)
+SAFE_DIS_CENTER    = 0.65   # m from center -> soft-zone start at rest (= old 0.35 body-edge)
+
 # Dynamic safety distance: when trapped (consecutive replan failures), shrink the
-# safety margin GRADUALLY so the planner can slip through tight gaps instead of
-# escaping immediately — with a HARD floor so it still never collides.
-# Speed-aware margin: the planner reference path is pushed away from obstacles
-# in proportion to speed, to ABSORB tracking error on turns in tight corridors
-# (the physical drone is always slightly outside the reference path). Fast ->
-# wider margin; slow/slipping through a gap -> smaller margin (agility preserved).
-K_SPEED_MARGIN     = 0.25   # m per (m/s) -> at v=1.0 adds +0.25 m of margin
-SAFE_DIS_TRAP_STEP = 0.05   # m  -> shrink per consecutive replan failure
-SAFE_DIS_TRAP_MIN  = 0.30   # m  -> hard floor of the SOFT margin; aligned with the
-                            #       planner hard_dis barrier (0.30) so the margin
-                            #       does not vanish & the drone does not hug obstacles when trapped.
+# SOFT margin gradually toward the hard barrier so the planner can slip through a
+# tight gap instead of escaping — never below the hard barrier (still won't collide).
+# Speed-aware margin: the reference path is pushed further from obstacles in
+# proportion to speed, to absorb tracking error on turns (the physical drone is
+# always slightly outside the reference). All in CENTER-OF-MASS metres.
+K_SPEED_MARGIN     = 0.25   # m per (m/s) -> at v=1.0 adds +0.25 m -> 0.90 m soft-start at cruise (= old)
+SAFE_DIS_TRAP_STEP = 0.05   # m  -> shrink the soft margin per consecutive replan failure
+SAFE_DIS_TRAP_MIN  = HARD_DIS_CENTER   # m  -> floor of the SOFT margin = the hard barrier
+# POST-CHECK reject line (2026-07-24): the forward safety guard now rejects a
+# trajectory ONLY when a point's center-of-mass clearance drops BELOW this — set
+# just under the hard barrier, and DECOUPLED from safe_dis. Previously the
+# post-check reused safe_dis (the SOFT comfort zone) as a hard reject line, so it
+# threw away exactly the grazing trajectories the optimizer was designed to
+# accept -> they fought each other -> near a tight obstacle the drone got a
+# reject-loop (documented "trapped, spinning" behavior). Now the optimizer owns
+# the soft zone [hard, safe] and the post-check only vetoes what dips below the
+# hard barrier — one job each, no overlap.
+POST_CHECK_CLEAR_MIN = HARD_DIS_CENTER - 0.05   # m from center (0.45)
 ESCAPE_FAIL_COUNT  = 4      # escape only after this many consecutive failures (room to shrink)
 # Escape is only useful if the drone is HUGGING an obstacle. In open space a replan
 # failure = the planner needs more time/seeds (or the goal is blocked far away) — escape
@@ -310,7 +355,9 @@ class ExpertPlannerNode(Node):
         self.declare_parameter("v_max",            1.0)
         self.declare_parameter("arm_timeout",     30.0)
         self.declare_parameter("connect_timeout", 30.0)
-        self.declare_parameter("safe_dis",         0.4)
+        # safe_dis is now the soft-zone clearance FROM THE CENTER OF MASS (m),
+        # not from the body edge (see BODY_RADIUS_M). Default = SAFE_DIS_CENTER.
+        self.declare_parameter("safe_dis",         SAFE_DIS_CENTER)
         self.declare_parameter("safe_dis_emergency", 0.3)
         # MULTI-HOMOTOPY (see workspace CLAUDE.md): true = save ALL feasible
         # solutions per scene (left & right) as separate CSV rows sharing the
@@ -335,6 +382,19 @@ class ExpertPlannerNode(Node):
         self.declare_parameter("arena_x_max", ARENA_X_MAX_DEFAULT)
         self.declare_parameter("arena_y_min", ARENA_Y_MIN_DEFAULT)
         self.declare_parameter("arena_y_max", ARENA_Y_MAX_DEFAULT)
+        # 2026-07-24: chained turnaround endpoints. The old behavior bounces
+        # between exactly two fixed points, (0,0) <-> (goal_x,0) -- every
+        # "leg" repeats the identical pair, so consecutive corridor traverses
+        # approach every obstacle from the same lateral offset. When true, the
+        # turnaround point's Y coordinate is redrawn (uniform random in
+        # [-turnaround_y_range, +turnaround_y_range]) each time the drone
+        # reaches a turnaround, so leg N+1's target is never the leg N-1
+        # point (A->B->C->D..., not A->B->A->B). X still alternates between
+        # 0 and goal_x (a single-corridor world only has two ends to traverse
+        # between) -- only the entry/exit Y offset varies. Default false =
+        # old bounce behavior, unchanged.
+        self.declare_parameter("randomize_turnaround_y", False)
+        self.declare_parameter("turnaround_y_range", 2.0)
 
         self._data_dir      = str(self.get_parameter("data_save_dir").value)
         self._target_n      = int(self.get_parameter("target_samples").value)
@@ -359,6 +419,16 @@ class ExpertPlannerNode(Node):
             (self._arena_x_min + self._arena_x_max) / 2.0,
             (self._arena_y_min + self._arena_y_max) / 2.0,
         ])
+        self._randomize_turnaround_y = bool(
+            self.get_parameter("randomize_turnaround_y").value)
+        self._turnaround_y_range = float(
+            self.get_parameter("turnaround_y_range").value)
+        # Keep the drawn Y at least 1.0m inside the arena wall so the
+        # turnaround point itself is never flush against the boundary.
+        self._turnaround_y_lo = max(self._arena_y_min + 1.0,
+                                    -self._turnaround_y_range)
+        self._turnaround_y_hi = min(self._arena_y_max - 1.0,
+                                    self._turnaround_y_range)
 
         # ── Data directory ────────────────────────────────────────────────────
         self._img_dir  = os.path.join(self._data_dir, "depth_img")
@@ -373,7 +443,13 @@ class ExpertPlannerNode(Node):
         cfg.v_max              = self._v_max
         cfg.T_min              = 0.5
         cfg.T_max              = 5.0
-        cfg.safe_dis           = self._safe_dis_norm
+        # safe_dis/hard_dis are stored in CENTER-OF-MASS metres (self._safe_dis_norm,
+        # HARD_DIS_CENTER) and converted to the BODY-EDGE frame the MINCO cost
+        # actually compares against the (inflated) ESDF. This initial cfg.safe_dis
+        # is overwritten every replan with the dynamic+speed-aware value (see
+        # _replan_and_record); hard_dis is set once here. clamp >=0 for safety.
+        cfg.safe_dis           = max(0.0, self._safe_dis_norm - BODY_RADIUS_M)
+        cfg.hard_dis           = max(0.0, HARD_DIS_CENTER - BODY_RADIUS_M)
         cfg.init_wpts_num      = 2
         cfg.init_T             = 2.5
         cfg.delta_t            = 0.1
@@ -530,6 +606,15 @@ class ExpertPlannerNode(Node):
         self._mission_state      = self.STATE_IDLE
 
         # ── Recovery / Escape state ───────────────────────────────────────────
+        # use_escape=false (default 2026-07-23, user request): the scripted
+        # escape maneuver (canned velocity away from the obstacle) is disabled
+        # — repeated ping-pong/spin behavior was judged more disruptive than
+        # helpful. _enter_escape() still runs, but only resets the stuck/fail
+        # bookkeeping and forces a fresh replan from the actual current state
+        # (relying on the planner/RL seeds + dynamic safe_dis shrink to find a
+        # way out), instead of taking over velocity control.
+        self.declare_parameter("use_escape", False)
+        self._use_escape           = bool(self.get_parameter("use_escape").value)
         self._replan_fail_count    = 0
         self._stuck_since          = None
         self._last_pos_for_stuck   = None
@@ -586,6 +671,11 @@ class ExpertPlannerNode(Node):
         self._pub_sp = self.create_publisher(
             PositionTarget, "/mavros/setpoint_raw/local", 10)
 
+        # Live viz for RViz: RL seeds + MINCO candidates + targets
+        self._pub_viz = self.create_publisher(MarkerArray, "/expert/viz", 1)
+        self._viz_planner = MinJerkPlanner(PlannerConfig())
+        self._viz_data = None
+
         self.create_subscription(String, "/px4/state",
                                  self._cb_state, 10)
         self.create_subscription(String, "/px4/sensors",
@@ -615,8 +705,13 @@ class ExpertPlannerNode(Node):
         self.get_logger().info("  Expert Planner v26 — Arena Bounds + GPS Height Reference")
         self.get_logger().info("=" * 62)
         self.get_logger().info(f"  v_max              : {self._v_max} m/s")
-        self.get_logger().info(f"  safe_dis           : {self._safe_dis_norm} m")
+        self.get_logger().info(
+            f"  safe_dis (center)  : {self._safe_dis_norm:.2f} m soft / "
+            f"{HARD_DIS_CENTER:.2f} m hard / post-check {POST_CHECK_CLEAR_MIN:.2f} m "
+            f"(body radius {BODY_RADIUS_M:.2f} m)")
         self.get_logger().info(f"  ES persist time    : {EMERGENCY_STOP_PERSIST_TIME}s (→ escape)")
+        self.get_logger().info(f"  use_escape         : {self._use_escape} "
+                               f"({'scripted maneuver' if self._use_escape else 'DISABLED — force replan only'})")
         self.get_logger().info(f"  Sample filters     : drone>{SAMPLE_MIN_ESDF}m, "
                                f"traj>{TRAJ_MIN_ESDF}m, speed<{SAMPLE_MAX_SPEED}m/s, alt_drift<0.5m")
         self.get_logger().info("=" * 62)
@@ -1510,9 +1605,11 @@ class ExpertPlannerNode(Node):
 
     def _dynamic_safe_dis(self) -> float:
         """
-        Dynamic safety distance: the more consecutive replan failures (trapped),
-        the smaller the margin so the planner can slip through tight gaps. Never
-        drops below SAFE_DIS_TRAP_MIN (the hard anti-collision floor).
+        Dynamic safety distance (CENTER-OF-MASS metres): the more consecutive replan
+        failures (trapped), the smaller the SOFT margin so the planner can slip
+        through tight gaps. Never drops below SAFE_DIS_TRAP_MIN (= the hard barrier),
+        so the hard anti-collision floor is preserved. The caller converts to the
+        body-edge frame before handing it to MINCO.
         """
         shrink = SAFE_DIS_TRAP_STEP * self._replan_fail_count
         return max(SAFE_DIS_TRAP_MIN, self._safe_dis_norm - shrink)
@@ -1539,6 +1636,22 @@ class ExpertPlannerNode(Node):
         return xy + (g / gn) * push
 
     def _enter_escape(self):
+        if not self._use_escape:
+            # Escape disabled: skip the scripted-velocity maneuver, just clear
+            # the stuck/fail bookkeeping so _check_stuck() re-anchors instead
+            # of re-triggering every cycle, and force a fresh replan attempt.
+            self._replan_fail_count  = 0
+            self._stuck_since        = None
+            self._last_pos_for_stuck = None
+            with self._traj_lock:
+                self._traj.invalidate()
+            with self._emergency_stop_lock:
+                self._emergency_stop_first_t = None
+            self.get_logger().warn(
+                "[Expert] Escape disabled (use_escape=false) — forcing fresh "
+                "replan instead of a scripted escape maneuver")
+            return
+
         escape_dir = self._find_escape_direction()
         self._escape_velocity_xy = escape_dir * ESCAPE_VELOCITY
         self._escape_active      = True
@@ -1884,6 +1997,17 @@ class ExpertPlannerNode(Node):
         (mode_sig dedup + _check_trajectory_safe) works unchanged; the cheapest
         becomes the executed solution. Returns True if >=1 seed converged;
         False -> the caller falls back to batch_plan (safe fallback).
+
+        PLAN CONTINUITY (2026-07-21): the RL path used to replan from scratch
+        every cycle, which re-defers the min-jerk turn each replan -> the drone
+        hesitates -> _check_stuck() fires -> ESCAPE (the visible circling). Fix:
+        also offer the active-trajectory anchor seed (set by _set_anchor_seed on
+        the topo frontend, gated by use_plan_continuity) as an ADDITIONAL
+        candidate, and — exactly like topo_batch_plan — fly it instead of the
+        cheapest fresh plan when it is still reasonable (cost <=
+        CONTINUITY_COST_FACTOR x cheapest). This keeps the turn fixed in world
+        coordinates so it actually gets executed. All converged solutions
+        (RL seeds + anchor) still reach the dataset via all_solutions.
         """
         try:
             seeds = self._rl_seeds.get_seeds(
@@ -1896,12 +2020,30 @@ class ExpertPlannerNode(Node):
             return False
 
         self._rl_try_count += 1
-        solutions = []
-        best = None
+
+        # Build the candidate list: the continuity anchor FIRST (if present &
+        # shape-compatible), then the 2 RL dual-h seeds. anchor_seed is set by
+        # _set_anchor_seed on the frontend; None when continuity is off / the
+        # trajectory was exhausted / invalid -> no anchor (old behavior).
+        fe = getattr(self._planner, "_topo_frontend", None)
+        anchor = getattr(fe, "anchor_seed", None) if fe is not None else None
+        candidates = []   # (is_anchor, int_wpts, ts)
+        if anchor is not None and len(seeds) > 0:
+            a_w = np.asarray(anchor[0], float)
+            a_ts = np.asarray(anchor[1], float)
+            if a_w.shape == seeds[0][0].shape and a_ts.shape == seeds[0][1].shape:
+                candidates.append((True, a_w, a_ts))
         for int_wpts, ts in seeds:
+            candidates.append((False, int_wpts, ts))
+
+        solutions   = []      # all converged (RL seeds + anchor) -> dataset
+        best        = None    # cheapest converged
+        anchor_sol  = None    # the anchor's optimized result (if it converged)
+        rl_converged = 0      # how many of the 2 RL seeds converged
+        for is_anchor, int_wpts, ts in candidates:
             try:
                 self._planner.read_planning_conditions(
-                    self._esdf, head_state, tail_state, int_wpts, ts)
+                    self._esdf, head_state, tail_state, int_wpts, ts.copy())
                 self._planner.plan_once()
                 cost = float(self._planner.weighted_cost.sum())
                 sol = (self._planner.int_wpts.copy(),
@@ -1909,19 +2051,107 @@ class ExpertPlannerNode(Node):
                 solutions.append(sol)
                 if best is None or cost < best[2]:
                     best = sol
+                if is_anchor:
+                    anchor_sol = sol
+                else:
+                    rl_converged += 1
             except Exception:
                 continue
 
         if best is None:
             return False
+
+        # Prefer continuing the active trajectory when it is still reasonable
+        # (<= CONTINUITY_COST_FACTOR x cheapest) — same rule as topo_batch_plan.
+        if (anchor_sol is not None
+                and anchor_sol[2] <= max(best[2], 1e-6) * CONTINUITY_COST_FACTOR):
+            best = anchor_sol
+
         self._planner.all_solutions = solutions
         self._planner.int_wpts   = best[0].copy()
         self._planner.ts         = best[1].copy()
         self._planner.final_cost = best[2]
         self._rl_ok_count += 1
-        if len(solutions) == 2:
+        if rl_converged == 2:
             self._rl_dual_count += 1
+        self._viz_data = {
+            "head": head_state.copy(), "tail": tail_state.copy(),
+            "seeds": [(iw.copy(), t.copy()) for iw, t in seeds],
+            "solutions": [(s[0].copy(), s[1].copy(), s[2]) for s in solutions],
+            "best_cost": best[2],
+            "target": self._target_state[0].copy(),
+        }
+        self._publish_viz()
         return True
+
+    # ── Live RViz markers (RL seeds + MINCO candidates + targets) ──────────────
+    def _sample_minjerk(self, int_wpts, ts, head, tail):
+        try:
+            p = self._viz_planner
+            p.read_planning_conditions(self._esdf, head, tail,
+                                       int_wpts.copy(), ts.copy())
+            return p.get_pos_array()
+        except Exception:
+            return None
+
+    def _publish_viz(self):
+        d = self._viz_data
+        if d is None:
+            return
+        z = self._alt
+        arr = MarkerArray()
+        clr = Marker(); clr.action = Marker.DELETEALL
+        arr.markers.append(clr)
+        stamp = self.get_clock().now().to_msg()
+        idx = [0]
+
+        def add_line(pts2d, rgba, width, ns):
+            m = Marker()
+            m.header.frame_id = "map"; m.header.stamp = stamp
+            m.ns = ns; m.id = idx[0]; idx[0] += 1
+            m.type = Marker.LINE_STRIP; m.action = Marker.ADD
+            m.scale.x = width
+            m.color.r, m.color.g, m.color.b, m.color.a = rgba
+            m.pose.orientation.w = 1.0
+            for p in pts2d:
+                pt = Point(); pt.x = float(p[0]); pt.y = float(p[1]); pt.z = float(z)
+                m.points.append(pt)
+            arr.markers.append(m)
+
+        def add_sphere(pos2d, rgba, size, ns):
+            m = Marker()
+            m.header.frame_id = "map"; m.header.stamp = stamp
+            m.ns = ns; m.id = idx[0]; idx[0] += 1
+            m.type = Marker.SPHERE; m.action = Marker.ADD
+            m.scale.x = m.scale.y = m.scale.z = size
+            m.color.r, m.color.g, m.color.b, m.color.a = rgba
+            m.pose.orientation.w = 1.0
+            m.pose.position.x = float(pos2d[0]); m.pose.position.y = float(pos2d[1])
+            m.pose.position.z = float(z)
+            arr.markers.append(m)
+
+        # MINIMAL 3-LINE VIEW (2026-07-24, user request for easier analysis):
+        # ONLY the two raw RL seeds + the single EXECUTED MINCO trajectory.
+        # No non-executed MINCO candidates, no start/target/goal spheres.
+        #
+        # 2 raw RL seeds (thin): blue = h=-1 (right), orange = h=+1 (left).
+        # head -> waypoints -> tail. Populated only when use_rl_seeds=true; the
+        # classic/topo path leaves d["seeds"] empty (then only the MINCO line shows).
+        seed_cols = [(0.35, 0.85, 1.0, 0.9), (1.0, 0.72, 0.2, 0.9)]  # right, left
+        for (iw, t), col in zip(d["seeds"], seed_cols):
+            pts = ([d["head"][0]] + [iw[:, j] for j in range(iw.shape[1])]
+                   + [d["tail"][0]])
+            add_line(pts, col, 0.05, "rl_seed")
+
+        # 1 EXECUTED MINCO trajectory (bright green, thick).
+        for sol in d["solutions"]:
+            if abs(sol[2] - d["best_cost"]) >= 1e-6:
+                continue   # skip everything except the one actually flown
+            traj = self._sample_minjerk(sol[0], sol[1], d["head"], d["tail"])
+            if traj is not None and len(traj) >= 2:
+                add_line(traj, (0.1, 1.0, 0.25, 0.95), 0.11, "minco")
+            break
+        self._pub_viz.publish(arr)
 
     # ── Replan + record ───────────────────────────────────────────────────────
     def _replan_and_record(self):
@@ -1978,13 +2208,15 @@ class ExpertPlannerNode(Node):
             self._reached_target = True
             return
 
-        # DYNAMIC safety distance — shrinks gradually when trapped
+        # DYNAMIC safety distance — shrinks gradually when trapped.
+        # All CENTER-OF-MASS metres here; convert to the body-edge frame the MINCO
+        # collision cost compares against the (inflated) ESDF before handing it over.
         safe_dis_dyn = self._dynamic_safe_dis()
         # Speed-aware margin: add distance proportional to the current speed so the
         # reference path moves away from obstacles (absorbs tracking error on turns).
         speed_now = float(np.linalg.norm(sync_drone_state.global_vel[:2]))
-        safe_dis_eff = safe_dis_dyn + K_SPEED_MARGIN * speed_now
-        self._planner.safe_dis = safe_dis_eff
+        safe_dis_eff = safe_dis_dyn + K_SPEED_MARGIN * speed_now       # center-of-mass
+        self._planner.safe_dis = max(0.0, safe_dis_eff - BODY_RADIUS_M)  # -> body edge
         use_emergency_safe = (safe_dis_dyn < self._safe_dis_norm - 1e-6)
 
         plan_time_ahead = 1.0
@@ -2099,32 +2331,45 @@ class ExpertPlannerNode(Node):
         new_traj_array = self._planner.get_full_state_cmd(hz=self._cmd_hz)
         total_time     = float(np.sum(self._planner.ts))
 
+        # Live RViz viz for the classic/topo path (_try_rl_seed_plan already
+        # publishes its own when used_rl=true -- skip here to avoid a
+        # redundant double-publish of the same replan).
+        if not used_rl:
+            self._viz_data = {
+                "head": head_state.copy(), "tail": tail_state.copy(),
+                "seeds": [],
+                "solutions": [(s[0].copy(), s[1].copy(), s[2]) for s in
+                             getattr(self._planner, "all_solutions", [])],
+                "best_cost": float(self._planner.final_cost),
+                "target": self._target_state[0].copy(),
+            }
+            self._publish_viz()
+
         # Race-condition guard: alt-rcv can trigger DURING a slow replan computation.
         if self._alt_recovery_active:
             return
 
-        # Forward safety guard: reject the trajectory if ANY point passes through an obstacle.
-        # FIX COLLISION #3: previously only the first 0.5s was checked — a trajectory
-        # that penetrates an obstacle in the middle/end still passed and got executed.
-        # Now the whole trajectory is checked with 0.1s subsampling. Note:
-        # get_edt_dis is now inflated by the drone radius, so the threshold = the
-        # distance from the drone body to the obstacle.
+        # Forward safety guard (2026-07-24 rewrite): reject the trajectory only if a
+        # point's CENTER-OF-MASS clearance dips below POST_CHECK_CLEAR_MIN — a single
+        # threshold set just under the hard barrier, DECOUPLED from safe_dis. The old
+        # guard reused safe_dis (the SOFT comfort zone) as a hard reject line — and a
+        # stricter one for the first 0.5s — so it threw away precisely the grazing
+        # trajectories the optimizer's soft cost was built to accept; near a tight
+        # obstacle that produced a reject-after-reject loop (the "trapped/spinning"
+        # behavior). Now the optimizer owns the soft zone and the post-check only
+        # vetoes points that dip below the hard barrier, uniformly over the whole
+        # trajectory. clearance_center = get_edt_dis (body edge) + BODY_RADIUS_M.
         if self._esdf.is_ready() and len(new_traj_array) > 0:
             step = max(1, int(self._cmd_hz * 0.1))   # check every 0.1s of the trajectory
-            n_fwd = min(int(self._cmd_hz * 0.5), len(new_traj_array))
-            # Threshold consistent with the dynamic safe_dis: when trapped, accept
-            # a trajectory that grazes closer (down to the hard floor) so it can pass.
             for i in range(0, len(new_traj_array), step):
                 pt_xy = new_traj_array[i][0]
-                dist  = float(self._esdf.get_edt_dis(pt_xy))
-                # First 0.5s: use the dynamic safe_dis; the rest: TRAJ_MIN_ESDF
-                # (also shrinks if the dynamic safe_dis < TRAJ_MIN_ESDF)
-                thresh = safe_dis_dyn if i < n_fwd else min(TRAJ_MIN_ESDF, safe_dis_dyn)
-                if dist < thresh:
+                clr_center = float(self._esdf.get_edt_dis(pt_xy)) + BODY_RADIUS_M
+                if clr_center < POST_CHECK_CLEAR_MIN:
                     self._replan_fail_count += 1
                     self.get_logger().warn(
-                        f"[Expert] ✗ Trajectory rejected: point #{i} esdf={dist:.2f}m "
-                        f"< {thresh:.2f}m. fail={self._replan_fail_count}",
+                        f"[Expert] ✗ Trajectory rejected: point #{i} "
+                        f"clearance(center)={clr_center:.2f}m "
+                        f"< {POST_CHECK_CLEAR_MIN:.2f}m. fail={self._replan_fail_count}",
                         throttle_duration_sec=1.0)
                     if (self._replan_fail_count >= ESCAPE_FAIL_COUNT
                             and self._planner_escape_allowed()):
@@ -2529,11 +2774,15 @@ class ExpertPlannerNode(Node):
                 # USER IDEA: fix altitude first at the turnaround point before
                 # navigating to the next target, so drift does not accumulate.
                 self._fix_altitude_at_waypoint()
+                next_y = 0.0
+                if self._randomize_turnaround_y:
+                    next_y = float(np.random.uniform(
+                        self._turnaround_y_lo, self._turnaround_y_hi))
                 if traj_direction == 1:
-                    self._global_target = np.array([0.0, 0.0])
+                    self._global_target = np.array([0.0, next_y])
                     traj_direction      = -1
                 else:
-                    self._global_target = np.array([self._goal_x, 0.0])
+                    self._global_target = np.array([self._goal_x, next_y])
                     traj_direction      = 1
                 self._near_global_target = False
                 self.get_logger().info(

@@ -1365,3 +1365,88 @@ policy tak pernah melihat arah pulang.
 - Evaluasi lintas-level L0-L4 policy v2 (cek forgetting scene mudah) — BELUM.
 - Uji held-out (test01/wide_test) untuk klaim generalisasi, bukan cuma
   training world gauntlet_train2.
+
+## TURUNKAN safety distance (fm_planner): safe_dis 0.5 -> 0.20 (2026-07-21)
+
+### Alasan (usulan user)
+
+User menduga `safe_dis` yang berlaku terlalu besar membuat drone sulit
+ber-navigasi di ruang sempit/kompleks, dan mengusulkan ulang skala margin:
+jarak aman dari **pusat massa** ke obstacle seharusnya cuma radius bodi
+(pusat->mounting motor, ~0.25 m) + margin tambahan kecil, total **~0.5 m**
+saat diam; boleh naik ke **~0.70 m** saat melaju (v~1.0 m/s = cruise lurus,
+bukan sedang bermanuver ketat) karena kecepatan tinggi biasanya berarti
+sedang di lorong terbuka, bukan di celah sempit.
+
+Sanity-check dulu terhadap riwayat: menaikkan `safe_dis` 0.5->1.0 pernah
+dicoba (catatan v1.13 di atas) dan JUSTRU merusak threading celah 2.0 m
+(bug "berputar di pintu R5") -> **menurunkan** `safe_dis` (arah usulan user)
+justru arah yang benar berdasarkan bukti historis proyek ini sendiri,
+bukan arah baru yang belum teruji.
+
+### Temuan saat implementasi: inflasi ESDF nyata = 0.30 m, bukan 0.25 m nominal
+
+`esdf_ros2.py` membulatkan `n_cells = ceil(inflation_radius / resolusi)` ->
+`ceil(0.25/0.1) = 3` sel -> inflasi FISIK yang benar-benar diterapkan =
+**3 x 0.1 = 0.30 m**, bukan 0.25 m yang dikonfigurasi. Jadi angka literal
+usulan user (`safe_dis=0.25`) akan menghasilkan total 0.30+0.25=**0.55 m**
+(nyaris sama dengan opsi "aman" yang TIDAK dipilih user), bukan 0.5 m yang
+dimaksud. Konstanta dikoreksi memakai inflasi RIIL (0.30 m), bukan nominal,
+supaya hasil akhir benar-benar 0.5/0.70 m sesuai maksud user:
+
+```
+safe_dis (base)  = 0.50 - 0.30(inflasi riil) = 0.20
+K_SPEED_MARGIN   = (0.70 - 0.50) / 1.0        = 0.20
+```
+
+### Perubahan
+
+- `min_jerk_planner.py` `PlannerConfig.safe_dis`: 0.5 -> **0.20**. `hard_dis`
+  (0.30) TIDAK diubah — user memilih opsi "persis angka usulan" setelah
+  diberi tahu bahwa ini membuat `safe_dis` (target lunak) < `hard_dis`
+  (lantai keras): zona soft-cubic `[hard_dis, safe_dis)` jadi kosong,
+  potensi dua-tingkat kolaps jadi satu tingkat (hard barrier saja). Trade-off
+  ini SUDAH disetujui secara eksplisit, bukan bug yang terlewat.
+- `expert_planner_node.py`: `K_SPEED_MARGIN` 0.25 -> **0.20**;
+  `SAFE_DIS_TRAP_MIN` 0.30 -> **0.20** (WAJIB disamakan dengan base baru —
+  kalau tetap 0.30, `_dynamic_safe_dis()`'s `max(SAFE_DIS_TRAP_MIN, ...)`
+  akan diam-diam membatalkan penurunan base ke 0.30 lagi). Konsekuensi:
+  mekanisme shrink-saat-replan-gagal (`SAFE_DIS_TRAP_STEP`) jadi INERT (base
+  sudah di titik minimum, tak ada lagi "ruang lunak" tersisa untuk disusutkan)
+  — dipertahankan di kode untuk konsistensi struktural/tuning masa depan,
+  bukan dihapus.
+- `expert_planning.launch.py`: default `safe_dis` 0.5 -> **0.20**, deskripsi
+  argumen diperbarui menjelaskan hubungan dengan inflasi riil 0.30 m.
+
+### Hasil (diverifikasi via replikasi formula `_dynamic_safe_dis`+`safe_dis_eff`)
+
+| v (m/s) | replan gagal beruntun | Total dari pusat massa |
+|---|---|---|
+| 0.0 | 0 atau berapa pun | **0.50 m** |
+| 1.0 (v_max cruise) | 0 atau berapa pun | **0.70 m** |
+
+Smoke-test end-to-end (`RLSeedAdapter` + `MinJerkPlanner` asli, `hard_dis=0.30
+> safe_dis=0.20`) tetap berjalan normal, seed RL tetap konvergen — kombinasi
+`safe_dis < hard_dis` tidak menyebabkan crash/exception di optimizer.
+
+### BELUM diuji SITL — ini perubahan analitis/offline
+
+Perubahan ini HANYA diverifikasi lewat replikasi formula + smoke-test
+end-to-end di atas (bukan Gazebo). Efek nyata terhadap perilaku terbang
+(apakah benar mengurangi kesulitan navigasi di celah sempit tanpa membuat
+drone menempel obstacle di ruang terbuka, mengingat zona soft-cubic kini
+kosong) **belum diverifikasi di SITL**. Rekomendasi: jalankan collecting
+singkat (mis. `box_narrow`, target_samples kecil) dan bandingkan
+escape/replan-fail/min_clear dengan baseline lama sebelum dipakai volume
+penuh — pola verifikasi yang sama seperti perubahan `safe_dis` sebelumnya
+di v1.13.
+
+### Launch lain (TIDAK disentuh, cek scope-nya)
+
+`nn_planning_unknown.launch.py` (safe_dis default **0.7**), `fm_planning_unknown.launch.py`
+dan `nn_inference.launch.py` (keduanya **0.5**) adalah launch INFERENSI
+(deployment), terpisah dari `expert_planning.launch.py` (collecting) yang
+diubah sesi ini. `K_SPEED_MARGIN`/`SAFE_DIS_TRAP_MIN` juga tidak ada di
+`nn_inference_node.py`/`fm_inference_node.py` (mekanisme dinamis ini
+khusus expert). Belum ditanyakan ke user apakah perubahan yang sama juga
+diinginkan untuk inferensi.

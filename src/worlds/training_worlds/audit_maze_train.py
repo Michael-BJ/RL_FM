@@ -1,21 +1,19 @@
 #!/usr/bin/env python3
-# audit_test01.py — v1.0 (2026-07-07)
+# audit_maze_train.py — v1.0 (2026-07-21)
 """
-Audit laik-lewat + multimodalitas untuk world TEST01 (tanpa ROS).
-Ambang IDENTIK audit_gauntlet_train.py (world test harus setara sulitnya
-dengan world training — variasi hasil antar world murni soal generalisasi):
+Audit laik-lewat + multimodalitas untuk world MAZE_TRAIN (tanpa ROS).
+Ambang IDENTIK audit_gauntlet_train.py / audit_gauntlet_train2.py:
 
   1. PASSABILITY  : jalur start->goal dengan clearance >= 0.65 m (planner
                     menerima) DAN >= 0.80 m (bebas penalti).
-  2. PINCH AUDIT  : pasangan antar-baris >= 1.30 m; pasangan yang melibatkan
-                    tiang pengisi >= 2.00 m (pelajaran explosion gauntlet_train).
-                    + BARU: pengisi -> dinding virtual arena >= 2.00 m
-                    (tiang (5.4,-4.9) train v1 duduk di pita koridor dekat
-                    dinding arena -> kantong sempit -> explosion).
-  3. MULTIMODAL   : tiap event ambigu >= 2 kelas homotopi pada jendela lokal.
+  2. PINCH AUDIT  : pasangan antar-event >= 1.30 m (batas absolut). Target
+                    fungsional user 1.8 m dilaporkan eksplisit: FAIL bila
+                    tersempit antar-event < 1.80 m.
+  3. MULTIMODAL   : titik pilihan (C1/C2) >= 2 kelas homotopi; pintu berliku
+                    (D1..D5) sengaja 1 kelas (threading lewat satu pintu).
 
-Jalankan:  python3 audit_test01.py
-Output  :  laporan konsol + test01_layout.png (denah + jalur A*).
+Jalankan:  python3 audit_maze_train.py
+Output  :  laporan konsol + maze_train_layout.png (denah + jalur A*).
 """
 import itertools
 import os
@@ -24,11 +22,12 @@ import sys
 import numpy as np
 from scipy import ndimage
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                "..", "fm_planner", "fm_planner"))
+_HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(_HERE, "..", "..", "fm_planner", "fm_planner"))
+sys.path.insert(0, os.path.join(_HERE, ".."))   # generate_wide_worlds.py di worlds/
 from homotopy_frontend import HomotopyFrontEnd  # noqa: E402
 
-from generate_wide_worlds import TEST01  # noqa: E402
+from generate_wide_worlds import MAZE_TRAIN  # noqa: E402
 
 RES        = 0.05
 X_RANGE    = (-3.0, 34.0)
@@ -40,26 +39,29 @@ GOAL       = np.array([30.0, 0.0])
 NEED_HARD  = 0.65          # inflasi 0.3 + edt terima 0.35
 NEED_FREE  = 0.80          # inflasi 0.3 + safe_dis 0.5 (bebas penalti)
 PAIR_MIN   = 1.30          # 2 x NEED_HARD (batas absolut)
-GAP_TARGET = 2.00          # celah fungsional bebas penalti
+GAP_TARGET = 1.80          # target fungsional user (jarak minimum antar-obstacle)
 A_BOUNDS   = (-1.5, 32.5, -5.5, 5.5)   # bounds A* frontend (arena - inset 0.5)
 
-# Baris/event TEST01 (indeks mengikuti urutan list TEST01):
-ROW_OF = {0: "E1", 1: "E1", 2: "E1",
-          3: "E2", 4: "E2",
-          5: "E3", 6: "E3",
-          7: "E4", 8: "E4", 9: "E4",
-          10: "E5", 11: "E5", 12: "E5", 13: "E5",
-          14: "E6", 15: "E6", 16: "E6", 17: "E6",
-          18: "F"}
+# Event MAZE_TRAIN (indeks mengikuti urutan list MAZE_TRAIN):
+#   D1 pintu +1.6 | D2 pintu -1.6 | C1 bimodal | D3 pintu +1.6 |
+#   D4 pintu -1.6 | C2 bimodal | D5 pintu +1.6
+ROW_OF = {0: "D1", 1: "D1",
+          2: "D2", 3: "D2",
+          4: "C1", 5: "C1", 6: "C1",
+          7: "D3", 8: "D3",
+          9: "D4", 10: "D4",
+          11: "C2", 12: "C2", 13: "C2",
+          14: "D5", 15: "D5"}
 
-# (nama, start, goal, min kelas homotopi). E6 sengaja 1: slalom threading
-# dengan garis lurus valid (kelas scene tak-ambigu juga harus teruji).
-EVENTS = [("E1 kotak 2.4m",         (1.0, 0.0),  (6.2, 0.0),  2),
-          ("E2 pintu bawah 2.0m",   (6.2, 0.0),  (10.5, 0.0), 2),
-          ("E3 zig-zag cermin",     (10.5, 0.0), (17.0, 0.0), 2),
-          ("E4 dinding 4.6m",       (17.0, 0.0), (21.3, 0.0), 2),
-          ("E5 pintu atas 2.0m",    (21.3, 0.0), (25.3, 0.0), 2),
-          ("E6 slalom (threading)", (25.0, 0.0), (29.3, 0.0), 1)]
+# (nama, start, goal, min kelas homotopi). D1..D5 = pintu tunggal -> 1 kelas
+# (threading). C1/C2 = box tengah + 2 tiang -> 2 kelas (kiri/kanan).
+EVENTS = [("D1 pintu +1.6 (anyam atas)",  (2.0, 0.0),  (6.0, 0.0),  1),
+          ("D2 pintu -1.6 (anyam bawah)", (6.0, 0.0),  (10.0, 0.0), 1),
+          ("C1 bimodal box 2.8",          (10.0, 0.0), (14.0, 0.0), 2),
+          ("D3 pintu +1.6 (anyam atas)",  (14.0, 0.0), (18.0, 0.0), 1),
+          ("D4 pintu -1.6 (anyam bawah)", (18.0, 0.0), (22.0, 0.0), 1),
+          ("C2 bimodal box 3.2",          (22.0, 0.0), (26.0, 0.0), 2),
+          ("D5 pintu +1.6 (anyam atas)",  (26.0, 0.0), (30.0, 0.0), 1)]
 
 
 def build_edt():
@@ -67,7 +69,7 @@ def build_edt():
     ys = np.arange(Y_RANGE[0] + RES / 2, Y_RANGE[1], RES)
     XX, YY = np.meshgrid(xs, ys)               # (rows=y, cols=x)
     occ = np.zeros(XX.shape, bool)
-    for ob in TEST01:
+    for ob in MAZE_TRAIN:
         if ob["type"] == "box":
             occ |= ((np.abs(XX - ob["x"]) <= ob["sx"] / 2)
                     & (np.abs(YY - ob["y"]) <= ob["sy"] / 2))
@@ -107,18 +109,6 @@ def surface_gap(a, b):
     return rect_dist(box, cyl["x"], cyl["y"]) - cyl["r"]
 
 
-def arena_wall_gap(ob):
-    """Jarak permukaan obstacle ke dinding virtual arena terdekat."""
-    if ob["type"] == "box":
-        hx, hy = ob["sx"] / 2, ob["sy"] / 2
-        r = 0.0
-    else:
-        hx = hy = 0.0
-        r = ob["r"]
-    return min(ob["x"] - hx - ARENA_X[0], ARENA_X[1] - ob["x"] - hx,
-               ob["y"] - hy - ARENA_Y[0], ARENA_Y[1] - ob["y"] - hy) - r
-
-
 def min_edt_along(edt, xs, ys, path_xy):
     ii = np.clip(np.round((path_xy[:, 1] - (Y_RANGE[0] + RES / 2)) / RES)
                  .astype(int), 0, len(ys) - 1)
@@ -131,35 +121,39 @@ def main():
     edt, xs, ys = build_edt()
     ok = True
 
-    # ── 2. pinch audit antar-baris ──────────────────────────────────────────
-    print(f"── Pinch audit (antar-baris < {PAIR_MIN:.2f} m ATAU melibatkan "
-          f"tiang pengisi < {GAP_TARGET:.2f} m = FAIL) ──")
+    # ── 2. pinch audit antar-event (target user 1.8 m) ───────────────────────
+    print(f"── Pinch audit (antar-event < {GAP_TARGET:.2f} m = FAIL; "
+          f"batas absolut {PAIR_MIN:.2f} m) ──")
     worst = (np.inf, None)
-    for i, j in itertools.combinations(range(len(TEST01)), 2):
-        if ROW_OF[i] == ROW_OF[j] and ROW_OF[i] != "F":
+    for i, j in itertools.combinations(range(len(MAZE_TRAIN)), 2):
+        if ROW_OF[i] == ROW_OF[j]:      # celah DALAM event = passage (dicek passability)
             continue
-        g = surface_gap(TEST01[i], TEST01[j])
+        g = surface_gap(MAZE_TRAIN[i], MAZE_TRAIN[j])
         if g < worst[0]:
             worst = (g, (i, j))
-        involves_filler = ROW_OF[i] == "F" or ROW_OF[j] == "F"
-        thresh = GAP_TARGET if involves_filler else PAIR_MIN
-        if g < thresh:
-            ok = False
-            print(f"  FAIL: obstacle #{i}({ROW_OF[i]}) vs #{j}({ROW_OF[j]}) "
-                  f"gap {g:.2f} m (ambang {thresh:.2f} m)")
-    print(f"  tersempit antar-baris: {worst[0]:.2f} m "
-          f"(#{worst[1][0]} vs #{worst[1][1]}) -> "
-          f"{'OK' if worst[0] >= PAIR_MIN else 'FAIL'}")
-    # pengisi -> dinding virtual arena (pelajaran tiang (5.4,-4.9) train v1)
-    for i, ob in enumerate(TEST01):
-        if ROW_OF[i] != "F":
-            continue
-        g = arena_wall_gap(ob)
-        flag = "OK " if g >= GAP_TARGET else "FAIL"
         if g < GAP_TARGET:
             ok = False
-        print(f"  {flag} pengisi #{i} -> dinding arena: {g:.2f} m "
-              f"(ambang {GAP_TARGET:.2f} m)")
+            print(f"  FAIL: obstacle #{i}({ROW_OF[i]}) vs #{j}({ROW_OF[j]}) "
+                  f"gap {g:.2f} m (ambang {GAP_TARGET:.2f} m)")
+    print(f"  tersempit antar-event: {worst[0]:.2f} m "
+          f"(#{worst[1][0]} vs #{worst[1][1]}) -> "
+          f"{'OK (>= 1.8 m)' if worst[0] >= GAP_TARGET else 'FAIL'}")
+
+    # ── passage DALAM event (box<->tiang di C1/C2, dua sisi pintu) ────────────
+    print("── Lebar passage dalam event (celah yang harus dilewati) ──")
+    worst_pass = (np.inf, None)
+    for row in ("C1", "C2"):
+        idx = [k for k, v in ROW_OF.items() if v == row]
+        for i, j in itertools.combinations(idx, 2):
+            g = surface_gap(MAZE_TRAIN[i], MAZE_TRAIN[j])
+            if g < worst_pass[0]:
+                worst_pass = (g, (row, i, j))
+    if worst_pass[1] is not None:
+        g = worst_pass[0]
+        print(f"  passage tersempit (box<->tiang): {g:.2f} m -> "
+              f"{'OK (>= 1.8 m)' if g >= GAP_TARGET else 'FAIL'}")
+        if g < GAP_TARGET:
+            ok = False
 
     # ── 1. passability start->goal ──────────────────────────────────────────
     esdf = _MockESDF(edt)
@@ -186,7 +180,7 @@ def main():
         flag = "OK " if len(paths) >= need_k else "!!  (kurang)"
         if len(paths) < need_k:
             ok = False
-        print(f"  {flag} {name:24s} {len(paths)} kelas "
+        print(f"  {flag} {name:28s} {len(paths)} kelas "
               f"(min {need_k})  sigs={sigs}")
         all_paths.extend(paths)
 
@@ -198,7 +192,7 @@ def main():
         from matplotlib.patches import Rectangle, Circle
 
         fig, ax = plt.subplots(figsize=(16, 6))
-        for ob in TEST01:
+        for ob in MAZE_TRAIN:
             if ob["type"] == "box":
                 ax.add_patch(Rectangle((ob["x"] - ob["sx"] / 2,
                                         ob["y"] - ob["sy"] / 2),
@@ -219,11 +213,10 @@ def main():
                         ha="center", fontsize=9)
         ax.set_xlim(-2, 33); ax.set_ylim(-6.5, 6.5)
         ax.set_aspect("equal"); ax.grid(alpha=0.3)
-        ax.set_title("test01 (held-out) — koridor 0..30, goal_x:=30, "
-                     "arena_x_max:=33 (garis = jalur A* per event)")
+        ax.set_title("maze_train — labirin berliku, koridor 0..30, "
+                     "goal_x:=30, arena_x_max:=33 (garis = jalur A* per event)")
         ax.legend(loc="lower right")
-        out = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                           "test01_layout.png")
+        out = os.path.join(_HERE, "maze_train_layout.png")
         fig.savefig(out, dpi=110, bbox_inches="tight")
         print(f"[png] {out}")
     except ImportError:

@@ -51,7 +51,15 @@ class PlannerConfig:
         self.v_max              = 1.0     # m/s maximum speed
         self.T_min              = 0.5     # minimum seconds per piece
         self.T_max              = 5.0     # maximum seconds per piece
-        self.safe_dis           = 0.5     # meters, safe distance to obstacle (SOFT margin)
+        # 2026-07-23: lowered 0.5 -> 0.35 at the user's request (easier
+        # navigation in tight gaps). With the real ESDF inflation 0.30m,
+        # 0.35 + 0.30 = 0.65m total from the center of mass at rest (down from
+        # 0.80m); the expert's K_SPEED_MARGIN raises it to ~0.90m at cruise
+        # (down from 1.05m). safe_dis (0.35) still > hard_dis (0.30), so the
+        # two-tier soft-cubic zone [0.30, 0.35] stays non-empty (only 0.05m
+        # wide — thinner than before, but not collapsed like the 2026-07-21
+        # 0.20 experiment which put safe_dis below hard_dis entirely).
+        self.safe_dis           = 0.35    # meters, safe distance to obstacle (SOFT margin)
         # Two-tier potential: beyond safe_dis cost=0 (free/smooth motion); the
         # [hard_dis, safe_dis] zone = a cubic soft margin that may be entered when
         # passing through tight gaps (navigation stays agile); below hard_dis =

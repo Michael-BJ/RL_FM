@@ -1,0 +1,118 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+    Property Tree Widget:
+      Expanded:
+        - /Global Options1
+        - /RL+MINCO (viz)1
+      Splitter Ratio: 0.5
+    Tree Height: 640
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid
+      Enabled: true
+      Color: 120; 120; 130
+      Line Style:
+        Line Width: 0.03
+        Value: Lines
+      Cell Size: 1
+      Plane Cell Count: 70
+      Reference Frame: <Fixed Frame>
+    - Class: rviz_default_plugins/TF
+      Name: TF
+      Enabled: true
+      Show Names: true
+      Show Axes: true
+      Marker Scale: 1.5
+    - Class: rviz_default_plugins/Map
+      Name: OctoMap (projected)
+      Enabled: true
+      Topic:
+        Value: /projected_map
+        Depth: 5
+        Durability Policy: Volatile
+        Reliability Policy: Reliable
+      Color Scheme: costmap
+      Draw Behind: true
+      Alpha: 0.5
+    - Class: rviz_default_plugins/PointCloud2
+      Name: Obstacles (pcd)
+      Enabled: true
+      Topic:
+        Value: /pointcloud/map
+        Depth: 5
+        Durability Policy: Volatile
+        Reliability Policy: Reliable
+      Style: Boxes
+      Size (m): 0.1
+      Color Transformer: AxisColor
+      Axis: Z
+      Autocompute Value Bounds: true
+      Use rainbow: true
+      Alpha: 0.9
+    - Class: rviz_default_plugins/MarkerArray
+      Name: OctoMap voxels (3D, perceived)
+      Enabled: true
+      Namespaces:
+        {}
+      Topic:
+        Value: /occupied_cells_vis_array
+        Depth: 5
+        Durability Policy: Volatile
+        Reliability Policy: Reliable
+    - Class: rviz_default_plugins/MarkerArray
+      Name: RL+MINCO (viz)
+      Enabled: true
+      Namespaces:
+        {}
+      Topic:
+        Value: /expert/viz
+        Depth: 5
+        Durability Policy: Volatile
+        Reliability Policy: Reliable
+  Global Options:
+    Background Color: 20; 20; 26
+    Fixed Frame: map
+    Frame Rate: 30
+  Name: root
+  Tools:
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/FocusCamera
+    - Class: rviz_default_plugins/Measure
+  Value: true
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Name: Orbit3D
+      Distance: 34
+      Pitch: 0.55
+      Yaw: 3.10
+      Focal Point:
+        X: 12
+        Y: 0
+        Z: 1.0
+    Saved:
+      - Class: rviz_default_plugins/TopDownOrtho
+        Name: TopDown-Fixed
+        Angle: 0
+        Scale: 20
+        Target Frame: <Fixed Frame>
+        X: 14
+        Y: 0
+      - Class: rviz_default_plugins/TopDownOrtho
+        Name: TopDown-Follow
+        Angle: 0
+        Scale: 28
+        Target Frame: base_link
+        X: 0
+        Y: 0
+        Z: 1.5
+Window Geometry:
+  Displays:
+    collapsed: false
+  Height: 950
+  Width: 1600
+  Hide Left Dock: false
+  Hide Right Dock: true

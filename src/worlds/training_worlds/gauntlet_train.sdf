@@ -6,7 +6,7 @@
 
   Pakai:
     cp gauntlet_train.sdf ~/PX4-Autopilot/Tools/simulation/gz/worlds/
-    ros2 launch neo_planner sitl.launch.py world:=gauntlet_train
+    ros2 launch fm_planner sitl.launch.py world:=gauntlet_train
 -->
 <sdf version="1.9">
   <world name="gauntlet_train">

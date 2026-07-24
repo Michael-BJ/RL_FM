@@ -8,23 +8,36 @@ Run after sitl.launch.py is already running (~18 seconds).
 Nodes launched:
     gz_depth_image_bridge  — bridge /depth_camera Gazebo -> ROS2 (32FC1, meters)
     gz_depth_bridge_node   — convert -> /realsense/depth/* pipeline
-    gz_depth_viewer_node   — colorized depth to /depth_viz/image & /depth_viz/debug
+    gz_depth_viewer_node   — colorized depth (only if show_camera:=true)
     vfh_obstacle_avoidance — compute safe direction, publish /vfh/movement_direction
+    rqt_image_view         — camera window (only if show_camera:=true)
 
 Usage:
-    ros2 launch drone camera_vfh.launch.py
+    ros2 launch fm_planner camera_vfh.launch.py                 # no camera window
+    ros2 launch fm_planner camera_vfh.launch.py show_camera:=true
 """
 
 from launch import LaunchDescription
-from launch.actions import ExecuteProcess, TimerAction
+from launch.actions import DeclareLaunchArgument, ExecuteProcess, TimerAction
+from launch.conditions import IfCondition
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
 def generate_launch_description():
 
-    # ── rqt_image_view ───────────────────────────────────────────────────────
+    # show_camera: default FALSE -> no rqt window / no colorized depth viewer.
+    # The depth BRIDGE (needed by the expert to record depth images) always runs.
+    show_camera_arg = DeclareLaunchArgument(
+        "show_camera", default_value="false",
+        description="true = open the rqt_image_view camera window + depth "
+                    "viewer; false (default) = headless camera (bridge only).")
+    show_camera = LaunchConfiguration("show_camera")
+
+    # ── rqt_image_view (only when show_camera:=true) ─────────────────────────
     image_viewer = TimerAction(
         period=6.0,
+        condition=IfCondition(show_camera),
         actions=[
             ExecuteProcess(
                 cmd=["ros2", "run", "rqt_image_view", "rqt_image_view",
@@ -54,12 +67,13 @@ def generate_launch_description():
         output="screen",
     )
 
-    # ── Colorized depth viewer ────────────────────────────────────────────────
+    # ── Colorized depth viewer (only when show_camera:=true) ─────────────────
     depth_viewer = Node(
         package="fm_planner",
         executable="gz_depth_viewer_node",
         name="gz_depth_viewer_node",
         output="screen",
+        condition=IfCondition(show_camera),
     )
 
     # ── VFH obstacle avoidance (classic) ─────────────────────────────────────
@@ -86,6 +100,7 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
+        show_camera_arg,
         gz_bridge,
         depth_bridge,
         depth_viewer,
