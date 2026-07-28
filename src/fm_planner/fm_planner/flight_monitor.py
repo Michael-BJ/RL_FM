@@ -4,7 +4,7 @@ flight_monitor.py — NN/FM planner flight-test monitor in ambiguity worlds
 =========================================================================
 PASSIVE monitoring node (does not control the drone, no colcon build needed —
 run it directly with python3). Used as the 5th terminal when testing
-nn_inference / fm_inference in the poles_wide / wide_test worlds.
+fm_inference in the poles_wide / wide_test worlds.
 
 What it records:
   - Drone trajectory from /px4/sensors (JSON) -> traj.csv + PNG plot.
@@ -47,16 +47,24 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.abspath(os.path.join(_THIS_DIR, "..", "..", "worlds")))
 from generate_wide_worlds import (                       # noqa: E402
     POLES_WIDE, WIDE_TEST, WALL_GAUNTLET, GAUNTLET_TRAIN, GAUNTLET_TRAIN2,
-    TEST01, DECISIVE_GAP, MAZE1,
+    GAUNTLET_TRAIN3, MAZE_TRAIN, TEST01, DECISIVE_GAP, MAZE1,
 )
 
+# The 5 simple "atom" worlds (box_narrow, box_wide, cylinder_fat,
+# twin_pole_gate, plate_wall) and their generator were removed in the
+# 2026-07-24 world consolidation. Import them only if the generator is still
+# present, so this monitor keeps working either way.
 sys.path.insert(0, os.path.abspath(
     os.path.join(_THIS_DIR, "..", "..", "worlds", "training_worlds")))
-from generate_training_worlds import WORLDS as TRAINING_WORLDS  # noqa: E402
+try:
+    from generate_training_worlds import WORLDS as TRAINING_WORLDS  # noqa: E402
+except ImportError:
+    TRAINING_WORLDS = {}
 
 WORLDS = {"poles_wide": POLES_WIDE, "wide_test": WIDE_TEST,
           "wall_gauntlet": WALL_GAUNTLET, "gauntlet_train": GAUNTLET_TRAIN,
           "gauntlet_train2": GAUNTLET_TRAIN2,
+          "gauntlet_train3": GAUNTLET_TRAIN3, "maze_train": MAZE_TRAIN,
           "decisive_gap": DECISIVE_GAP, "maze1": MAZE1,
           "test01": TEST01, **TRAINING_WORLDS}
 
@@ -67,7 +75,7 @@ WIDE_BOX_MAX_Y  = 0.5
 MIN_FLIGHT_Z   = 0.8    # samples below this are ignored (not airborne yet)
 GOAL_REACH_DIS = 1.6    # lap-complete detection (the planner node uses 1.5)
 
-# Planner node log pattern (nn_inference_node / fm_inference_node / legacy_inference_node)
+# Planner node log pattern (fm_inference_node)
 LOG_PATTERNS = [
     ("escape",      ">>> ESCAPE"),
     ("exit_escape", "<<< Exit escape"),
@@ -79,8 +87,7 @@ LOG_PATTERNS = [
     ("replan_fail", "Replan failed"),
     ("done",        "DONE"),
 ]
-PLANNER_NODE_NAMES = ("nn_inference_node", "fm_inference_node",
-                      "legacy_inference_node")
+PLANNER_NODE_NAMES = ("fm_inference_node",)
 
 
 def obstacle_clearance(x, y, ob):

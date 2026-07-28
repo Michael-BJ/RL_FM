@@ -40,7 +40,11 @@ class DepthToPointcloudNode(Node):
     def __init__(self):
         super().__init__("depth_to_pointcloud_node")
 
-        self.declare_parameter("min_range",   0.15)
+        # 2026-07-26: default 0.15 -> 0.5. Returns closer than 0.5 m are almost
+        # always near-field noise / self-view and, at 0.15 m, burned SPURIOUS
+        # occupied cells into the octomap right at the drone -> esdf=0.00 at its
+        # own cell -> stuck / chaotic escape. The launches override this too.
+        self.declare_parameter("min_range",   0.5)
         self.declare_parameter("max_range",   4.0)
         self.declare_parameter("skip_pixels", 2)    # downsample: 1 point per N pixels
 
@@ -81,6 +85,16 @@ class DepthToPointcloudNode(Node):
         if self.cam_info is None:
             return
 
+        # Stamp NOW, before the back-projection below. The stamp still has to be
+        # this node's clock (see the v2 note in the module docstring — the Gazebo
+        # image carries sim-time while the MAVROS TF is wall-clock), but taking
+        # it at ARRIVAL instead of after ~76k points of numpy work removes that
+        # processing time from the pose octomap transforms the cloud with. Any
+        # residual latency still smears every point by v*L in world coordinates,
+        # which is where stale phantom voxels come from — see STUCK_MAP_RESET_*
+        # in fm_inference_base.py for the recovery path.
+        stamp = self.get_clock().now().to_msg()
+
         try:
             depth = self.bridge.imgmsg_to_cv2(msg, desired_encoding="32FC1")
         except Exception as e:
@@ -117,12 +131,14 @@ class DepthToPointcloudNode(Node):
 
         # FIX: stamp with THIS NODE's clock, not msg.header (which is Gazebo sim-time)
         frame_id = msg.header.frame_id
-        self.pub_cloud.publish(self._to_pointcloud2(points, frame_id))
+        self.pub_cloud.publish(self._to_pointcloud2(points, frame_id, stamp))
 
-    def _to_pointcloud2(self, points: np.ndarray, frame_id: str) -> PointCloud2:
+    def _to_pointcloud2(self, points: np.ndarray, frame_id: str,
+                        stamp) -> PointCloud2:
         msg = PointCloud2()
-        # FIX TF SYNC: use the node clock (now), not the depth image's sim-time stamp
-        msg.header.stamp    = self.get_clock().now().to_msg()
+        # FIX TF SYNC: node clock, not the depth image's sim-time stamp. Captured
+        # at image arrival by the caller (not here) — see _on_depth.
+        msg.header.stamp    = stamp
         msg.header.frame_id = frame_id
         msg.height     = 1
         msg.width      = len(points)

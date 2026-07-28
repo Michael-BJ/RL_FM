@@ -144,7 +144,7 @@ SAFE_DIS_TRAP_MIN  = HARD_DIS_CENTER   # m  -> floor of the SOFT margin = the ha
 # reject-loop (documented "trapped, spinning" behavior). Now the optimizer owns
 # the soft zone [hard, safe] and the post-check only vetoes what dips below the
 # hard barrier — one job each, no overlap.
-POST_CHECK_CLEAR_MIN = HARD_DIS_CENTER - 0.05   # m from center (0.45)
+POST_CHECK_CLEAR_MIN = HARD_DIS_CENTER - 0.05   # m from center (0.55)
 ESCAPE_FAIL_COUNT  = 4      # escape only after this many consecutive failures (room to shrink)
 # Escape is only useful if the drone is HUGGING an obstacle. In open space a replan
 # failure = the planner needs more time/seeds (or the goal is blocked far away) — escape
@@ -1906,7 +1906,7 @@ class ExpertPlannerNode(Node):
         return state
 
     # ── Form training data ────────────────────────────────────────────────────
-    def _form_nn_input(self, depth_img, drone_state, plan_init_state, target_state):
+    def _form_model_input(self, depth_img, drone_state, plan_init_state, target_state):
         # FIXED-RANGE normalization (see DEPTH_NORM_MAX_M): 0=invalid/no
         # return, 255=beyond range (inf -> 10 m). Absolute scale preserved.
         d = np.nan_to_num(depth_img, nan=0.0,
@@ -1947,7 +1947,7 @@ class ExpertPlannerNode(Node):
 
         return depth_u8, motion_info
 
-    def _form_nn_output(self, drone_state, int_wpts):
+    def _form_model_output(self, drone_state, int_wpts):
         quat      = drone_state.attitude
         M_minus_1 = int_wpts.shape[1]
         result    = np.zeros((3, M_minus_1))
@@ -1968,7 +1968,7 @@ class ExpertPlannerNode(Node):
         `mode_sig_str` (v1.5) = topological side-signature from
         compute_mode_signature() -- see the `mode_sig` column in CSV_HEADER."""
         ts_str = datetime.datetime.now().strftime("%Y%m%d%H%M%S%f")[:-3]
-        depth_u8, motion_info = self._form_nn_input(
+        depth_u8, motion_info = self._form_model_input(
             depth_img, drone_state, plan_init_state, target_state)
 
         img_path = os.path.join(self._img_dir, f"{ts_str}.png")
@@ -1977,7 +1977,7 @@ class ExpertPlannerNode(Node):
         with open(self._csv_path, "a", newline="") as f:
             writer = csv.writer(f)
             for int_wpts, ts, mode_sig_str in solutions:
-                wpts_local = self._form_nn_output(drone_state, int_wpts)
+                wpts_local = self._form_model_output(drone_state, int_wpts)
                 writer.writerow(["t" + ts_str]
                                 + motion_info.tolist()
                                 + wpts_local.tolist()

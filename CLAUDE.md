@@ -1248,6 +1248,18 @@ lebih pintar dari teacher, perbaiki expert/world dulu") berlaku di sini.
 
 ### Fix: revert G4 ke sy=5.6
 
+> ⚠️ **KOREKSI 2026-07-27: fix di bawah ini TIDAK PERNAH BENAR-BENAR
+> DITERAPKAN.** Saat diperiksa 2026-07-27, `generate_wide_worlds.py` masih
+> berisi `sy=7.6` dan komentarnya sendiri masih berbunyi *"Revert: kembalikan
+> sy=5.6"* — jadi entri ini mendeskripsikan perbaikan yang hanya ada di
+> dokumentasi. Akibatnya nyata dan terulang: drone macet di depan G4
+> (x=17.65, y=2.95, 10+ replan gagal berturut) pada uji 2026-07-27, persis
+> gejala escape-spin yang entri ini klaim sudah selesai. Revert-nya BARU
+> diterapkan 2026-07-27 (bersama pelebaran celah lain ke >=2.0 m, lihat
+> section "Semua celah gauntlet_train2 >= 2.0 m" di bawah). Pelajaran:
+> entri "sudah diperbaiki" di CLAUDE.md wajib diverifikasi ke kode, bukan
+> dipercaya apa adanya.
+
 `generate_wide_worlds.py` GAUNTLET_TRAIN2 G4 dikembalikan ke geometri asli
 (`sy=5.6`, celah atas ~2,1 m / bawah ~3,3 m, keduanya feasible & dalam
 rentang q_scale 3,0 m). World diregenerasi
@@ -1450,3 +1462,343 @@ diubah sesi ini. `K_SPEED_MARGIN`/`SAFE_DIS_TRAP_MIN` juga tidak ada di
 `nn_inference_node.py`/`fm_inference_node.py` (mekanisme dinamis ini
 khusus expert). Belum ditanyakan ke user apakah perubahan yang sama juga
 diinginkan untuk inferensi.
+
+## HAPUS NN planner dari paket `fm_planner` (2026-07-27)
+
+Atas permintaan user: seluruh bagian NN planner dihapus; yang dipakai bersama
+expert + FM inference diganti nama ke istilah FM/netral, bukan NN.
+
+### Yang dihapus (semua ter-track git -> `git checkout <commit> -- <path>`)
+
+- `fm_planner/legacy_inference_node.py` — mirror deployment NEO-Planner lama
+  (identik byte-per-byte dengan `neo_planner_node.py` di neo_planner_ws kecuali
+  nama). Di sinilah `PlannerNet` (arsitektur NN) tinggal.
+- `launch/nn_inference.launch.py`, `launch/nn_planning_unknown.launch.py`.
+- Entry point `nn_inference_node` & `legacy_inference_node` di `setup.py`
+  (+ dua launch itu dari `data_files`).
+
+### Yang diganti nama (bukan dihapus — dipakai bersama)
+
+- `fm_planner/nn_inference_node.py` -> **`fm_planner/fm_inference_base.py`**
+  (`git mv`, riwayat terjaga). Class `NNInferenceNode` -> **`FMInferenceBase`**,
+  kini ABSTRAK: `_load_model()` dan `_initial_guesses()` melempar
+  `NotImplementedError`, `_warm_up()` jadi no-op yang bisa di-override. Jalur
+  NN (`PlannerNet` loading, `_nn_initial_guess`) dan `main()`-nya dibuang —
+  modul ini bukan node yang bisa dijalankan sendiri lagi.
+- Simbol netral yang dulu diimpor dari `legacy_inference_node` dipindah MASUK
+  ke `fm_inference_base.py`: `DroneState`, `TrajectorySegment`, `IMG_WIDTH`,
+  `IMG_HEIGHT`, `MOTION_INPUT_SIZE`, `_SENSOR_QOS`.
+- `_form_nn_input`/`_form_nn_output` -> **`_form_model_input`/`_form_model_output`**
+  di `fm_inference_base.py` DAN `expert_planner_node.py` (2+2 call site).
+  Encoding-nya TIDAK berubah — kontrak input expert<->model tetap identik.
+- Nama node default `"nn_inference_node"` -> `"fm_inference_node"`; banner
+  "NN Inference" -> "FM Inference"; label waktu inferensi di log `nn=` -> `inf=`.
+- `flight_monitor.py`: `PLANNER_NODE_NAMES` jadi `("fm_inference_node",)`.
+
+### Catatan
+
+- `expert_planner_node.py` TIDAK pernah mengimpor node NN/legacy — hanya nama
+  method-nya yang ikut diseragamkan.
+- Komentar `PlannerNet` di `fm_model.py` DIPERTAHANKAN (silsilah encoder: FM
+  memakai backbone yang sama) tapi diberi catatan bahwa kelasnya kini hanya ada
+  di `~/Training_model_FM_planner/nn_trainer.py`, bukan di paket ini.
+- `decisive_eval.py` TIDAK dihapus: ia cuma mem-parse nama folder
+  `~/monitor_logs` (label `nnD-*`/`fmD-*`) dari run historis yang datanya masih
+  ada — bukan bagian dari planner NN.
+- `build/` + `install/` fm_planner DIHAPUS lalu build ulang: colcon tidak
+  membuang executable/launch usang, jadi `nn_inference_node` sempat masih
+  terdaftar di `ros2 pkg executables` sesudah build biasa.
+- Verifikasi: `ros2 pkg executables fm_planner` -> tinggal 9 (tanpa nn/legacy);
+  `ros2 run fm_planner fm_inference_node` jalan normal (banner "FM Inference",
+  model V3 termuat, guard FULL).
+
+## Semua celah gauntlet_train2 >= 2.0 m (2026-07-27)
+
+Atas permintaan user ("dengan dimensi drone sekarang sangat sulit bernavigasi").
+Sebelumnya ada 7 celah < 2.0 m; yang paling merusak adalah **koridor luar
+antara tiang pembatas dan dinding arena (1.20-1.40 m)**. Itu jebakan: terlalu
+sempit untuk diterbangkan (`guard_clearance` 0.60 m DARI PUSAT berarti butuh
+>= 1.2 m bersih, praktis mustahil di 1.2 m) tapi cukup lebar untuk TERLIHAT
+bisa dilewati planner -> drone masuk lalu terjebak, Guard 1 menyala terus.
+
+Perubahan di `generate_wide_worlds.py` (GAUNTLET_TRAIN2):
+
+| Event | Sebelum | Sesudah | Alasan |
+|---|---|---|---|
+| G4 `box_3` | sy=7.6 (celah atas 1.1 m) | **sy=5.6** (atas 2.6 / bawah 3.8) | revert yang tidak pernah diterapkan (lihat KOREKSI di section 2026-07-20) |
+| G3 tiang luar | y=±4.2 (koridor 1.4 m) | **y=±5.6** (menempel dinding) | jebakan -> jelas tertutup, tujuan asli (cegah memutar lewat luar) tetap tercapai |
+| G6 tiang luar | y=±4.4 (koridor 1.2 m) | **y=±5.6** (menempel dinding) | idem |
+| G6 tiang inti | (27.5,±1.3),(28.5,·) | **(27.6,±1.35),(28.6,·)** | celah diagonal 1.99 -> 2.08 m; geser +0.1 x menaikkan celah ke G5 seg-3 dari 1.90 -> 2.00 m |
+
+Hasil: **tidak ada lagi celah 0 < g < 2.0 m**. Celah 0.00 yang tersisa =
+tiang pembatas menempel dinding arena (tertutup rapat, bukan jebakan sempit).
+`audit_gauntlet_train2.py` **LULUS PENUH** — dan **G4 kini benar-benar 2 kelas
+homotopi** (`sigs=[(-1,-1),(1,1)]`), bukti langsung bahwa sebelumnya dinding
+itu efektif satu-sisi. `.sdf` sudah dicopy ke PX4 worlds (diverifikasi
+byte-level: box_3 = `0.40 5.60 3.60` di kedua lokasi).
+
+BELUM diuji terbang setelah perubahan ini.
+
+## FIX: guard menolak terbang ke ruang yang BELUM diamati (2026-07-27)
+
+### Gejala
+
+Di `gauntlet_train2` (world sudah dilebarkan, v_max 0.9, cap PX4 2.0 m/s,
+GUARDS 1+2 tanpa escape) drone **menabrak dinding G2 bawah** (x=[7.80,8.20],
+y=[-4.00,0.90]) pada posisi y=-1.84 — di TENGAH dinding, bukan pintunya
+(pintu y=0.9..2.9). Penerbangan sebelum kontak **sempurna stabil**: z=1.94
+konstan, vz=0.00, speed 1.26 m/s. Jadi bukan masalah kendali/pengereman.
+
+Bukti kunci dari log: **setiap replan sampai detik tumbukan BERHASIL dengan
+cost bersih** (4.3, lalu 4.6) dan guard baru menyala **0.6 detik SESUDAH**
+kontak. Artinya ESDF benar-benar tidak melihat dinding itu.
+
+### Akar masalah: dua asumsi optimistis di ESDF
+
+1. `esdf_ros2.py` `occupancy_map_cb`: `binary = (raw == 100)` -> sel
+   **unknown (-1) dilipat jadi FREE**. Dinding yang belum sempat dimasukkan
+   octomap = ruang bebas bagi planner.
+2. `get_edt_dis()` mengembalikan **10000.0 ("aman")** untuk posisi di LUAR
+   grid peta. Setelah impuls tumbukan melempar drone keluar wilayah terpeta,
+   `esdf=10000` bertahan **60+ detik** sehingga tidak ada yang menghentikan
+   drone terbang buta menembus dinding-dinding berikutnya.
+
+Keduanya BENAR untuk cost MINCO (tak bisa menghukum yang belum diamati, kalau
+tidak drone tak akan pernah maju) tapi SALAH untuk guard reaktif.
+
+### Fix
+
+- `esdf_ros2.py`: simpan `unknown_2d` (raw == -1) + method baru
+  **`is_unobserved(pos)`** -> True bila di luar grid ATAU sel unknown.
+  `get_edt_dis()` **TIDAK diubah** — cost MINCO tetap optimistis.
+- `fm_inference_base.py` **Guard 1**: ikut trip bila `is_unobserved(drone_pos)`
+  (drone sendiri OFF-MAP). Log membedakan sebabnya: `ESDF too close` vs
+  `drone is OFF-MAP`.
+- `fm_inference_base.py` **Guard 2**: sampel look-ahead yang `is_unobserved`
+  dianggap tidak aman -> `path ahead UNOBSERVED` -> invalidate+hover (atau
+  escape di mode guard penuh). Horizonnya cuma 1.5 s (~2 m saat jelajah)
+  sedangkan kamera menjangkau 4 m, jadi apa pun di jendela itu SEHARUSNYA
+  sudah teramati; kalau belum, berhenti memang jawaban yang benar.
+
+### Verifikasi (offline, unit test)
+
+Grid sintetis 40x40 @0.15 m, kolom x>=4.5 m ditandai unknown:
+
+| titik | `is_unobserved` | `get_edt_dis` |
+|---|---|---|
+| free teramati (1.0,1.0) | False | 1.90 |
+| **unknown (4.8,1.0)** | **True** | **3.66 <- tampak "aman"!** |
+| di luar peta (99,99) | True | 10000.00 |
+| di obstacle (1.5,3.0) | False | 0.00 |
+
+Baris kedua adalah bug-nya secara telanjang: ESDF melaporkan 3.66 m bebas di
+sel yang belum pernah dilihat drone.
+
+BELUM diuji SITL.
+
+## FIX TABRAKAN INFERENCE: 3 lubang + 1 regresi (2026-07-27, sore)
+
+### Gejala (dilaporkan user): "drone masih menabrak, jangan pakai escape"
+
+EMPAT run gauntlet_train2 berturut-turut di mode uji fair (`GUARDS 1+2,
+invalidate+hover, NO escape`) berakhir MENYENTUH DINDING, lalu impuls Gazebo
+melempar drone keluar arena — dan karena escape memang mati (benar, sesuai
+`MEMO_PENGUJIAN.md`), run itu tak bisa pulih dan cuma menggantung:
+
+| run | akhir | keterangan |
+|---|---|---|
+| g8 | (14.6, 9.0, z=-0.30) @ 4.28 m/s | terlempar |
+| g9 | (14.1, 16.3) esdf=0.00 | jauh di luar arena |
+| ga | (37.8,-40.0) esdf=10000 | terbang BUTA, masih lapor "Replan ok" |
+| gb | (17.9, 7.2) esdf=0.00 | menggantung hover ~10 menit |
+
+### Akar masalah (dari log gb, bukan dugaan)
+
+```
+[1785150660.676] FLYING pos=(15.8,0.0) esdf=0.15 speed=0.69
+[1785150660.762] Replan ok #36 cost=2007.6 t=1962ms cand#8/8   <-- DITERIMA
+[1785150666.666] FLYING pos=(17.7,7.7,z=-0.09)                 <-- kontak
+```
+
+TIGA lubang independen, semuanya ditutup:
+
+1. **Post-check bisa turun sampai garis kontak.** Aturan adaptif
+   `thr = min(hard, cur_clear-0.05)` ada supaya drone yang SUDAH di zona lunak
+   tetap bisa merencanakan jalan keluar — tapi ia menurunkan ambang untuk
+   SEMUA trajektori, termasuk yang cuma bertahan sedekat posisi sekarang. Pada
+   `cur_clear` 0.45 m ambang jadi 0.40 m dari pusat = **0.10 m celah fisik**
+   (BODY_RADIUS_M 0.30), habis dimakan tracking error 0.69 m/s. Sekarang:
+   lantai mutlak `POST_CHECK_FLOOR_CENTER=0.45` + di dalam pita relaksasi
+   trajektori WAJIB benar-benar MENJAUH (klaim aslinya ditulis harfiah).
+2. **Tidak ada lantai kualitas rencana.** `plan_once()` cuma memveto komponen
+   TABRAKAN (`weighted_cost[3]`); energi/waktu/pelanggaran-kecepatan tak
+   dibatasi, jadi solve L-BFGS-B yang divergen (detik sebelumnya
+   `min_jerk_planner.py:311` melaporkan overflow aritmatika) tetap dilaporkan
+   "Replan ok". Terukur atas 1434 rencana yang diterima sesi itu: p50=9.0,
+   p90=24.1, lalu ekor berat — 87 rencana >50, 46 rencana >100, sampai 2007.6.
+   Gate baru `MAX_PLAN_COST=50` (>93% rencana sehat lolos).
+3. **Drone tiba di dinding terlalu cepat untuk dihentikan hover.** Guard nyala
+   di 0.70 m (pusat) tapi jawabannya "tahan posisi", sedangkan jarak
+   pengereman PX4 pada 0.7-0.9 m/s se-orde dengan margin itu. Menaikkan garis
+   trip justru akan MENOLAK celah 2.0 m yang jadi dasar world ini. Solusinya:
+   datang lebih pelan — `_speed_allowance()` membalik relasi yang SUDAH dipakai
+   planner (`margin = k * speed`) jadi `v_allow = (clearance - guard)/ (k *
+   closing)`. **`closing`** = seberapa lurus drone MENDEKAT (dari gradien ESDF:
+   1 = tepat menuju obstacle, ~0 = sejajar) — tanpa faktor ini cap juga
+   mencekik drone yang cuma LEWAT di samping dinding (replay atas clearance
+   ter-log: 24% sampel akan terkunci di lantai kecepatan).
+
+Ini **murni pembatas kecepatan, bukan manuver**: hanya menskalakan laju pada
+lintasan yang dipilih model, arah TIDAK pernah diubah — jadi tidak bisa
+menyelamatkan/menyamarkan kandidat buruk seperti escape. Escape tetap MATI.
+
+Tambahan: horizon look-ahead dulu tetap dalam SATUAN WAKTU (1.5 s), yang
+menyusut dalam METER justru saat kecepatan membuat jarak henti membesar
+(0.9 m/s -> cuma 1.35 m). Kini diperpanjang sampai menutup
+`LOOKAHEAD_MIN_DIST_M=2.5` m lintasan.
+
+Dan: begitu drone di luar peta/arena, tak ada lagi yang bisa diukur — run
+diakhiri (`BLIND_ABORT_S=20` -> land -> DONE + baris vonis), bukan menggantung
+seperti gb.
+
+### REGRESI yang ketahuan HANYA karena diterbangkan (penting)
+
+Memperpanjang horizon look-ahead ikut memperpanjang veto RUANG BELUM-TERAMATI,
+dan itu **merusak**: asumsi "kamera 4 m, jadi apa pun sedekat ini pasti sudah
+terpetakan" berlaku di ~1.3 m tapi GAGAL di 2.5 m (kerucut depth 91 deg atas
+0.5-4.0 m; sel di luar sumbu / baru saja dihadapi sah-sah saja masih kosong).
+Terukur di SITL: `path ahead UNOBSERVED` melonjak dari 4 kali/run jadi
+TERUS-MENERUS, drone merayap **0.03-0.12 m/s**. Perbaikan: dua horizon TERPISAH
+— cek clearance boleh jauh (cuma menyala pada obstacle yang SUDAH dikenal),
+veto ruang-buta tetap di 1.5 s. Uji offline TIDAK menangkap ini; hanya terbang
+yang menangkapnya.
+
+### Verifikasi
+
+**Offline** — `fm_planner/test_anticollision_guards.py` (jalankan langsung,
+tanpa ROS/Gazebo; memutar ulang state yang TERCATAT di log saat gagal): gate
+biaya menolak 113.1/141.4/259.0/2007.6 & menerima 2.0-49.0; post-check menolak
+rencana menempel-dinding pada state gb persis (pusat 0.45 m) TAPI tetap
+menerima rencana keluar — termasuk saat drone sudah DI BAWAH lantai (anti
+deadlock: lantai ikut turun mengikuti drone, karena trajektori selalu dimulai
+di posisi drone sendiri); limiter memanggil kode yang DIKIRIM (bukan salinan
+rumus) dan terbukti menjaga arah tetap paralel. SEMUA LULUS.
+
+**SITL** (gauntlet_train2, mode fair identik dengan yang crash, goal 30):
+**leg pergi SELESAI sampai goal lalu berbalik** —
+
+| metrik | run gb (sebelum) | run baru (sesudah) |
+|---|---|---|
+| hasil | **kontak dinding G4 + terlempar** | **capai goal x=29.4, berbalik** |
+| replan gagal | 8+ beruntun, macet | **0** |
+| collision guard | 1131 | 5 (hover, pulih) |
+| min clearance (pusat) | 0.45 -> kontak | **0.60 m (tak pernah di bawah garis guard)** |
+| explosion / escape | 1 / 0 | **0 / 0** |
+| biaya diterima maks | **2007.6** | 44.5 (di bawah gate 50) |
+
+Kecepatan median 0.45 m/s (maks 0.99) — TIDAK merayap; limiter cuma menyala
+3x, tepat di titik tersempit (mis. `Speed limited 0.65 -> 0.33 (clearance
+0.64)`) termasuk saat memutari G4, dinding yang dulu menabraknya.
+
+### Parameter baru (default = perilaku baru; semua bisa dimatikan)
+
+`max_plan_cost:=0` (matikan gate), `use_speed_limit:=false` (matikan cap),
+`blind_abort_s:=0` (jangan pernah abort) — diteruskan lewat
+`fm_planning_unknown.launch.py`. Banner startup kini mencetak ketiganya, jadi
+log lama/baru bisa dibedakan sekilas. Ringkasan akhir mencetak
+`Safety vetoes: cost-gate N, post-check M, tightest speed cap X`.
+
+CATATAN: leg PULANG belum selesai diamati saat catatan ini ditulis, dan n=1 —
+closed-loop STOKASTIK (lihat KOREKSI 2026-07-10), jadi ini bukti "lubang yang
+terdiagnosis sudah tertutup", BUKAN klaim statistik.
+
+## DEFAULT BARU: guard inference OFF total + guard_clearance 0.70→0.55 (2026-07-27, sesi sore/malam)
+
+### Perubahan di `fm_planner/launch/fm_planning_unknown.launch.py`
+
+Dalam satu sesi interaktif (SITL GUI + RViz, `gauntlet_train2`, model FM V3
+`run_20260724_190037`), default diubah beberapa kali atas permintaan user:
+
+1. `use_safety_guards` **true → false** (escape mati by default).
+2. `use_lookahead_guard` **false → true** (perantara: mode "GUARDS 1+2,
+   invalidate+hover, NO escape" — dipilih karena guard OFF total dianggap
+   berisiko, lihat MEMO_PENGUJIAN.md) → **lalu diubah lagi jadi false** di
+   sesi yang sama setelah user menonton perilaku model dengan guard OFF
+   TOTAL dan menilai sudah cukup baik. Hasil akhir: KEDUA guard reaktif
+   (Guard 1 posisi-sekarang, Guard 2 look-ahead) DAN escape sekarang OFF
+   by default.
+3. `guard_clearance` **0.70 → 0.55** (disamakan dengan `hard_clearance`=0.55
+   m, menutup celah 0.55–0.70 m tempat planner sendiri sudah menerima
+   rencana ("Replan ok") tapi guard reaktif tetap menolaknya).
+
+### Kronologi & bukti yang mendorong perubahan #3 lalu #2
+
+- **guard_clearance=0.70 (guard ON, escape OFF)**: drone macet PERMANEN di
+  (26.9, 2.2) — tepat di mulut **G6** (slalom 4-tiang, x=27.5-28.5),
+  3.8 m dari goal — selama 90 detik penuh. `esdf` pusat massa stabil di
+  0.64 m, 0.06 m di bawah ambang 0.70 m, tak pernah berubah walau 100+
+  replan dicoba (cost 9-47, SEMUA lolos gate planner sendiri). Diakhiri
+  bersih oleh `stuck_abort_s=90` (mendarat, bukan menggantung — bekerja
+  sesuai desain).
+- **guard_clearance=0.55 (guard ON, escape OFF)**: dijalankan ulang, TIDAK
+  ADA lagi trip "ESDF too close" sepanjang x=0→15 m (cuma "OFF-MAP"
+  transien di awal terbang) — tapi run dihentikan manual oleh user sebelum
+  mencapai x=27, jadi **BELUM terkonfirmasi** apakah G6 benar-benar lolos
+  di clearance ini.
+- **Guard OFF total**: drone terbang murni model+MINCO tanpa reaktif sama
+  sekali; user menilai perilaku sudah cukup baik dan minta ini jadi
+  default permanen.
+
+### Insiden operasional (bukan bug kode fm_planner, dicatat untuk referensi)
+
+`octomap_server_node` (paket ROS2 stock) SEGFAULT (exit -11) tepat setelah
+startup pada salah satu percobaan relaunch. `ros2 launch` tidak me-restart
+otomatis; efeknya persis sesuai desain guard: ESDF/posisi drone terbaca
+"OFF-MAP" terus-menerus → `blind_abort_s=20` mendaratkan misi dengan
+bersih (bukti lain bahwa timer abort ini bekerja). Restart penuh node
+group T4 (bukan cuma octomap_server sendiri — `ros2 launch` tak mendukung
+restart parsial satu action) menyelesaikannya; tidak terulang di
+percobaan-percobaan berikutnya → diduga race condition transien saat
+startup, bukan bug deterministik.
+
+### Yang TETAP aktif walau kedua guard OFF (tidak berubah — per desain `fm_inference_base.py`)
+
+- Post-check (`_validate_planned_traj`, `hard_clearance`=0.55 m) — menolak
+  rencana yang menyerempet SEBELUM diterima sebagai "Replan ok".
+- Cost-gate (`max_plan_cost`=50) — menolak solusi MINCO yang meledak
+  secara numerik.
+- Guard 3 / tracking-gap (`GAP_INVALIDATE`=2.5 m) — selalu ON, tak
+  digating flag guard manapun.
+- Speed limiter (`use_speed_limit`=true) — selalu ON, independen dari
+  guard flag (memakai `guard_clearance` cuma sebagai angka referensi).
+- `blind_abort_s`=20 / `stuck_abort_s`=90 — timer akhir-misi, independen
+  dari guard flag.
+
+### ⚠️ Kontradiksi dengan `command.txt` yang BELUM diselesaikan
+
+`command.txt` (blok 2, "WAJIB: mode UJI KUALITAS MODEL") masih menuliskan
+guard-OFF-total sebagai kombinasi yang TIDAK BOLEH dipakai sendirian tanpa
+`use_lookahead_guard:=true`, dengan alasan risiko artefak latensi octomap
+(pernah bikin FM crash `min_clear=0.00` di `wall_gauntlet`). Default paket
+SEKARANG justru persis kombinasi yang diperingatkan itu — dipilih SADAR
+oleh user setelah risikonya dijelaskan ulang, bukan terlewat. Contoh
+command T4 di `command.txt` blok 1-3 TIDAK mencantumkan flag guard apa pun,
+jadi siapa pun yang menyalin perintah itu apa adanya sekarang otomatis
+jalan di mode guard-OFF-total, bukan mode fair yang didokumentasikan di
+sana. `command.txt` belum diperbarui untuk mencerminkan ini — perlu
+diselaraskan (atau tambahkan flag eksplisit di contoh command) kalau mau
+kembali ke mode fair sebagai default pengujian.
+
+### BELUM dikerjakan / belum terkonfirmasi
+
+- Apakah `guard_clearance=0.55` (kalau guard suatu saat dinyalakan lagi)
+  benar-benar melewati G6 — run terakhir berhenti sebelum mencapai titik
+  itu.
+- Perilaku default BARU (guard OFF total) belum diuji sampai goal x=30
+  secara penuh — user menghentikan run setelah puas melihat perilaku
+  awal, bukan setelah misi selesai/mencapai goal.
+- Risiko yang didokumentasikan sebelumnya (`command.txt`: kombinasi
+  guard-off-total pernah membuat FM crash di `wall_gauntlet`) TETAP
+  berlaku sebagai peringatan untuk world lain yang lebih keras (dinding
+  solid) — belum tentu seaman ini di `wall_gauntlet`/`test01`, baru
+  divalidasi di `gauntlet_train2`.

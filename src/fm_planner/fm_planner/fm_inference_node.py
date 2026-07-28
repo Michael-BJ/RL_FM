@@ -31,7 +31,7 @@ CHANGELOG
   v1.x (2026-07-05)  Mode persistence, bimodal early-steering, ablation
       toggles (FM-minimal vs FM+).
 ==========================================================================
-Same pipeline as nn_inference_node (guards, escape, mission sequence are
+Same pipeline as fm_inference_base (guards, escape, mission sequence are
 inherited UNCHANGED — this keeps NN-vs-FM comparisons apple-to-apple).
 Only the initializer differs:
 
@@ -47,7 +47,7 @@ Model file: checkpoint from fm_trainer.py
           (the Euler chain is unrolled at export time, so n_steps is fixed
           inside the graph; the n_steps parameter only affects .pth)
 
-Extra parameters vs nn_inference_node:
+Extra parameters vs fm_inference_base:
   K       (default 8) : candidates sampled per replan
   n_steps (default 2) : Euler steps (.pth backend only)
 
@@ -70,8 +70,8 @@ from rclpy.executors import MultiThreadedExecutor
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)
 from fm_model import PARAM_DIM, load_checkpoint
-from nn_inference_node import (
-    NNInferenceNode, HAS_ONNX, IMG_WIDTH, IMG_HEIGHT, MOTION_INPUT_SIZE,
+from fm_inference_base import (
+    FMInferenceBase, HAS_ONNX, IMG_WIDTH, IMG_HEIGHT, MOTION_INPUT_SIZE,
 )
 
 if HAS_ONNX:
@@ -137,7 +137,7 @@ RANK_LEN_PENALTY = 0.05   # score penalty per meter of extra polyline length
 GATE_LOG_EVERY = 20
 
 
-class FMInferenceNode(NNInferenceNode):
+class FMInferenceNode(FMInferenceBase):
 
     # ── Model backend ─────────────────────────────────────────────────────────
 
@@ -146,9 +146,9 @@ class FMInferenceNode(NNInferenceNode):
         # parent __init__, the earliest point where parameters can be declared.
         self.declare_parameter("K", 8)
         self.declare_parameter("n_steps", 2)
-        # Ablation toggles (default OFF = "FM-minimal": pipeline identical to
-        # nn_inference except for the candidate generator — the official
-        # "model swap only" comparison. ON = the anticipatory FM+ variant.)
+        # Ablation toggles (default OFF = "FM-minimal": nothing beyond the base
+        # pipeline + the candidate generator, i.e. the historical "model swap
+        # only" comparison configuration. ON = the anticipatory FM+ variant.)
         self.declare_parameter("use_mode_persistence", False)
         self.declare_parameter("use_bimodal_steering", False)
         # Sampler-level fixes (Tahap 2). v2.1 anchor = trajectory-remainder
@@ -260,7 +260,7 @@ class FMInferenceNode(NNInferenceNode):
     # ── K-candidate initial guesses ───────────────────────────────────────────
 
     def _initial_guesses(self, depth_img, drone_state, head_state, tail_state):
-        depth_u8, motion_info = self._form_nn_input(
+        depth_u8, motion_info = self._form_model_input(
             depth_img, drone_state, head_state[0], head_state[1])
         input_flat = np.concatenate(
             [depth_u8.reshape(-1).astype(np.float32), motion_info])

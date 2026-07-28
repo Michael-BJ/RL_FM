@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# fm_model.py — v1.0 — Flow Matching planner model (encoder identical to PlannerNet, output (Q, t̄) MINCO)
+# fm_model.py — v1.0 — Flow Matching planner model (encoder identical to the NN baseline's PlannerNet, output (Q, t̄) MINCO)
 """
 FM planner — generative multimodal initializer for MINCO optimization.
 =============================================================================
@@ -24,7 +24,7 @@ Design (per research discussion):
                            (wpts meters vs ts seconds live on different
                            scales; FM assumes a well-scaled target space).
 
-  - I/O convention == deployment nodes (nn_inference_node._nn_initial_guess):
+  - I/O convention == deployment node (fm_inference_node._initial_guesses):
       input  : flat [depth_u8 as float32 (0..255, NO /255), motion_info(24)]
       output : 9 = [w1_body_xyz, w2_body_xyz, ts1..ts3]  (denormalized)
       The node rotates wpts to world frame and clips ts to [T_min, T_max].
@@ -58,8 +58,11 @@ PARAM_DIM = 9            # [w1_xyz, w2_xyz, ts1..3] body frame
 # the 24-dim bottleneck from the frozen backbone. The old checkpoint (24)
 # can still be loaded: load_checkpoint() detects the feature size from the
 # state_dict.
-IMG_FEATURE_SIZE = 128   # 24 (== PlannerNet) -> 128; the NN is intentionally NOT changed
+IMG_FEATURE_SIZE = 128   # 24 (== PlannerNet) -> 128; the NN baseline is left as-is
 MOTION_FEATURE_SIZE = 24  # == PlannerNet
+# NOTE (2026-07-27): PlannerNet itself no longer lives in this package — the NN
+# planner was removed. It survives in the training repo (~/Training_model_FM_planner/
+# nn_trainer.py); the references above describe the shared encoder lineage.
 CONTEXT_DIM = IMG_FEATURE_SIZE + MOTION_FEATURE_SIZE  # 152
 TIME_EMB_DIM = 32
 VF_HIDDEN = 128
@@ -246,7 +249,7 @@ class FMPlanner(nn.Module):
             x = x + dt * self.velocity(x, self.time_emb(t), ctx)
         return self.normalizer.denormalize(x)
 
-    # ── Deployment helper (mirrors nn_inference_node convention) ────────────
+    # ── Deployment helper (mirrors the fm_inference_node convention) ────────
     @torch.no_grad()
     def predict_candidates(self, flat_input_np, K=8, n_steps=2,
                            device="cpu"):

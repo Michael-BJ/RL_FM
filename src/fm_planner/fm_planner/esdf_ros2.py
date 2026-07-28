@@ -82,6 +82,7 @@ class ESDF:
         self.inflation_radius = float(inflation_radius)
 
         self.occupancy_2d   = None    # np.ndarray (height x width), 0=free 1=occ (RAW)
+        self.unknown_2d     = None    # np.ndarray, 1 = never observed (see cb)
         self.esdf_map       = None    # np.ndarray (height x width), distance in meters
         self.esdf_grad_x    = None    # np.ndarray (height x width)
         self.esdf_grad_y    = None    # np.ndarray (height x width)
@@ -118,6 +119,18 @@ class ESDF:
             raw = np.array(map_msg.data, dtype=np.int8)
             binary = (raw == 100).astype(np.uint8)
             self.occupancy_2d = binary.reshape(
+                self.map_height, self.map_width)
+            # 2026-07-27: keep the UNOBSERVED cells too. The occupancy above
+            # folds unknown (-1) into "free", which is right for the MINCO cost
+            # (you cannot penalise what has not been seen, or the drone never
+            # advances) but WRONG for the reactive guards: a wall the octomap
+            # has not inserted yet reads as open space, and the planner happily
+            # commits to it. MEASURED (gauntlet_train2, 2026-07-27): every
+            # replan up to impact succeeded with a clean cost (4.3, 4.6) while
+            # the drone flew straight into the G2 wall at 1.26 m/s, perfectly
+            # stable (z=1.94, vz=0.00); the collision guard only fired 0.6 s
+            # AFTER contact. See is_unobserved() for how the guards use this.
+            self.unknown_2d = (raw == -1).astype(np.uint8).reshape(
                 self.map_height, self.map_width)
 
             # DINDING VIRTUAL ARENA: tandai sel di luar batas sebagai occupied
@@ -200,6 +213,30 @@ class ESDF:
             if not self._in_bounds(row, col):
                 return 10000.0
             return float(self.esdf_map[row, col])
+
+    def is_unobserved(self, pos) -> bool:
+        """True if (x, y) has NOT been observed yet — either outside the mapped
+        grid entirely, or a cell the octomap still marks unknown (-1).
+
+        Deliberately NOT folded into get_edt_dis(): that stays optimistic
+        (10000 = safe) so the MINCO cost can still plan into unseen space,
+        which is what lets the drone advance at all. This is for the reactive
+        guards, which must refuse to FLY into space the drone has not actually
+        looked at yet. Two measured failures motivate it (2026-07-27,
+        gauntlet_train2): (1) the drone flew into the G2 wall while every
+        replan reported a clean cost, because the wall was still unknown =
+        "free"; (2) after the resulting contact threw it out of the mapped
+        region, get_edt_dis returned 10000 for 60+ s, so nothing stopped it
+        flying blind through more walls."""
+        with self._lock:
+            if not self._received:
+                return True
+            row, col = self._world_to_index(pos)
+            if not self._in_bounds(row, col):
+                return True
+            if self.unknown_2d is None:
+                return False
+            return bool(self.unknown_2d[row, col])
 
     def get_edt_grad(self, pos) -> list:
         """

@@ -357,14 +357,25 @@ GAUNTLET_TRAIN2 = [
     #     + 2 tiang pembatas luar (gap tiang-inti->pembatas 2.0 m/sisi).
     dict(type="cyl", x=12.3, y=1.4,   r=0.4, h=3.9),
     dict(type="cyl", x=12.3, y=-1.4,  r=0.4, h=3.9),
-    dict(type="cyl", x=12.3, y=4.2,   r=0.4, h=3.9),
-    dict(type="cyl", x=12.3, y=-4.2,  r=0.4, h=3.9),
-    # G4: dinding TANPA pintu, asimetris off-center. DIPERPANJANG +1 m tiap
-    #     ujung (sy 5.6 -> 7.6, pusat tetap y=0.6) atas permintaan -> spans
-    #     y=-3.2..4.4. Celah baru: ATAS ~1.1 m (praktis tak muat drone),
-    #     BAWAH ~2.3 m (satu-satunya sisi lewat). Efektif jadi dinding
-    #     satu-sisi (paksa bawah). Revert: kembalikan sy=5.6.
-    dict(type="box", x=16.5, y=0.6,   sx=0.4, sy=7.6, h=3.6),
+    # 2026-07-27: tiang pembatas luar y=±4.2 -> ±5.6 (tepi menempel dinding
+    #     arena ±6.0). Sebelumnya menyisakan koridor luar 1.4 m: terlalu
+    #     sempit untuk diterbangkan (guard_clearance 0.60 dari pusat berarti
+    #     butuh >=1.2 m bersih) tapi cukup lebar untuk TERLIHAT bisa dilewati
+    #     planner -> drone masuk lalu terjebak. Menempel dinding = jelas
+    #     tertutup, sekaligus tetap memenuhi tujuan aslinya (mencegah drone
+    #     memutari seluruh event lewat koridor luar).
+    dict(type="cyl", x=12.3, y=5.6,   r=0.4, h=3.9),
+    dict(type="cyl", x=12.3, y=-5.6,  r=0.4, h=3.9),
+    # G4: dinding TANPA pintu, asimetris off-center.
+    #     2026-07-27: sy 7.6 -> 5.6. Revert ini SUDAH didokumentasikan di
+    #     CLAUDE.md (2026-07-20, "DIAGNOSA + FIX escape-spin di G4") tapi
+    #     ternyata TIDAK PERNAH diterapkan ke generator — sy tetap 7.6, dan
+    #     komentar lama masih berbunyi "Revert: kembalikan sy=5.6". Pada 7.6
+    #     spans y=-3.2..4.4 -> celah ATAS cuma 1.1 m (tak muat drone) sehingga
+    #     dinding jadi efektif satu-sisi; drone terbukti macet di depannya
+    #     (x=17.65, y=2.95, 10+ replan gagal berturut, 2026-07-27).
+    #     Pada 5.6 spans y=-2.2..3.4 -> celah ATAS 2.6 m, BAWAH 3.8 m.
+    dict(type="box", x=16.5, y=0.6,   sx=0.4, sy=5.6, h=3.6),
     # G5: zig-zag 3-segmen (train/test01 cuma 2), overlap 0.4 m di y=0 tiap
     #     pasangan berurutan, spacing 2.5 m (sama seperti gauntlet_train R4).
     dict(type="box", x=20.0, y=1.4,   sx=0.4, sy=3.2, h=3.6),
@@ -375,10 +386,15 @@ GAUNTLET_TRAIN2 = [
     # sudah diaudit+diterbangkan aman), ditranslasi +1.5 m di x ke posisi
     # baru supaya event paling rawan di seluruh gauntlet TIDAK memakai
     # angka baru yang belum pernah divalidasi.
-    dict(type="cyl", x=27.5, y=1.3,   r=0.4, h=3.9),
-    dict(type="cyl", x=28.5, y=-1.3,  r=0.4, h=3.9),
-    dict(type="cyl", x=28.0, y=4.4,   r=0.4, h=3.9),
-    dict(type="cyl", x=28.0, y=-4.4,  r=0.4, h=3.9),
+    # 2026-07-27 (semua celah >= 2.0 m): geser +0.1 m di x supaya celah ke
+    #     G5 segmen-3 (box x=25.0) naik 1.90 -> 2.00 m; renggangkan tiang inti
+    #     y ±1.3 -> ±1.35 supaya celah diagonal tengah 1.99 -> 2.08 m; tiang
+    #     pembatas luar ±4.4 -> ±5.6 menempel dinding arena (alasan sama
+    #     seperti G3 di atas — koridor luar 1.2 m adalah jebakan, bukan jalur).
+    dict(type="cyl", x=27.6, y=1.35,  r=0.4, h=3.9),
+    dict(type="cyl", x=28.6, y=-1.35, r=0.4, h=3.9),
+    dict(type="cyl", x=28.1, y=5.6,   r=0.4, h=3.9),
+    dict(type="cyl", x=28.1, y=-5.6,  r=0.4, h=3.9),
 ]
 
 # DECISIVE_GAP — HELD-OUT "NN-trap" discriminator (dibuat 2026-07-10)

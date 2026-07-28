@@ -15,9 +15,19 @@ changes that have been made.
    flies the drone back and forth between `(0,0) ↔ (goal_x, 0)` across a pole
    field, recording `(depth image, state, target) → trajectory` pairs as a
    dataset to train a neural network.
-2. **NN/FM inference** — a neural network (`PlannerNet`, PyTorch) or the FM
-   (Flow Matching) model replaces the expert planner for navigation in unknown
-   environments.
+2. **FM inference** — the FM (Flow Matching) model replaces the expert planner
+   for navigation in unknown environments.
+
+> **2026-07-27 — the NN planner was REMOVED from this package.** Deleted:
+> `nn_inference_node.py` (became the abstract `fm_inference_base.py`),
+> `legacy_inference_node.py` (the old NEO-Planner deployment mirror, which also
+> held `PlannerNet`), and the launches `nn_inference.launch.py` /
+> `nn_planning_unknown.launch.py`. Shared, model-agnostic pieces
+> (`DroneState`, `TrajectorySegment`, `IMG_WIDTH/HEIGHT`, `MOTION_INPUT_SIZE`,
+> `_SENSOR_QOS`) moved into `fm_inference_base.py`; `_form_nn_input` /
+> `_form_nn_output` were renamed `_form_model_input` / `_form_model_output` in
+> both the base and `expert_planner_node.py`. All files were tracked in git, so
+> `git checkout <commit> -- <path>` restores any of them.
 
 The stack runs on top of **PX4 SITL + Gazebo (gz sim) + MAVROS**.
 
@@ -25,9 +35,8 @@ The stack runs on top of **PX4 SITL + Gazebo (gz sim) + MAVROS**.
 | Executable | File | Purpose |
 |---|---|---|
 | `expert_planner_node` | `expert_planner_node.py` | Expert planner + mission state machine + dataset recorder |
-| `legacy_inference_node` | `legacy_inference_node.py` | NN inference (deployment) — legacy mirror of the expert pipeline, superseded by `nn_inference_node`/`fm_inference_node` |
-| `nn_inference_node` | `nn_inference_node.py` | Standalone NN inference |
-| `fm_inference_node` | `fm_inference_node.py` | FM (flow-matching) inference — samples K candidates per replan, ranks by ESDF clearance, warm-starts MINCO with the best; inherits all guards from `nn_inference_node` |
+| `fm_inference_node` | `fm_inference_node.py` | FM (flow-matching) inference — samples K candidates per replan, ranks by ESDF clearance, warm-starts MINCO with the best |
+| — (not a node) | `fm_inference_base.py` | `FMInferenceBase`: the whole inference pipeline except the candidate generator (mission state machine, MAVROS/PX4, ESDF + octomap band, MINCO, guards, escape). Abstract hooks: `_load_model`, `_initial_guesses`, `_warm_up` |
 | `publish_pcd_node` | `publish_pcd_node.py` | Publish `.pcd` ground truth → `/pointcloud/map` |
 | `px4_sensor_reader` | `px4_sensor_reader.py` | Read PX4 state (pos/vel/yaw) via uXRCE/MAVROS |
 | `vfh_obstacle_avoidance_node` | `vfh_realsense.py` | Classic VFH from the depth camera |
@@ -75,17 +84,11 @@ ros2 launch fm_planner expert_planning.launch.py \
     pcd_path:=/home/michael/poles.pcd target_samples:=500
 ```
 
-**Inference:**
+**Inference (FM planner)** — the only inference pipeline in this package:
 ```bash
 ros2 launch fm_planner sitl.launch.py world:=forest1
 ros2 launch fm_planner mavros_only.launch.py
 ros2 launch fm_planner camera_vfh.launch.py
-ros2 launch fm_planner nn_planning_unknown.launch.py \
-    model_path:=.../planner_net.pth goal_x:=20.0
-```
-
-**Inference (FM planner)** — same first 3 terminals, then:
-```bash
 ros2 launch fm_planner fm_planning_unknown.launch.py \
     model_path:=/home/michael/saved_net/fm/run_XXXX/fm_planner_XXXX.pth \
     goal_x:=20.0 K:=8 n_steps:=2
@@ -253,6 +256,10 @@ without collisions**.
 ---
 
 ## 7. Session changes 2026-07-05 — NN/FM inference (multimodal experiment)
+
+> HISTORICAL. File names below (`nn_inference_node.py`, `nn_inference`) refer to
+> what is now `fm_inference_base.py` — see the removal note in §1. The behaviour
+> described still applies; only the names changed.
 
 Context: multimodal dataset `~/training_data/run_20260705_172250` (5000 rows,
 ratio 1.51), new models `~/saved_net/nn/run_20260705_182409` and
